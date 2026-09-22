@@ -13,7 +13,7 @@ If you want the Python version instead, that's the one to use.
 ## Install
 
 ```bash
-npm install decidr
+npm install decidr-ts
 ```
 
 Zero dependencies. Node 18+ (uses the global `fetch`).
@@ -21,7 +21,7 @@ Zero dependencies. Node 18+ (uses the global `fetch`).
 ## Quickstart: local model via Ollama
 
 ```ts
-import { Client } from "decidr";
+import { Client } from "decidr-ts";
 
 const client = new Client("qwen3.5:4b"); // any Ollama model, defaults to http://127.0.0.1:11434
 
@@ -47,7 +47,7 @@ decision.eliminated;      // ids under a losing branch that weren't individually
 ## Quickstart: hosted model via OpenAI (or anything OpenAI-compatible)
 
 ```ts
-import { Client, OpenAIBackend } from "decidr";
+import { Client, OpenAIBackend } from "decidr-ts";
 
 const client = new Client("gpt-4o", {
   backend: new OpenAIBackend({ apiKey: process.env.OPENAI_API_KEY }),
@@ -105,7 +105,7 @@ you can write your own for another provider -- `Client` only ever calls
 that one method.
 
 ```ts
-import { Backend, ChatMessage, ChatResult } from "decidr";
+import { Backend, ChatMessage, ChatResult } from "decidr-ts";
 
 class MyBackend extends Backend {
   async chat(model: string, messages: ChatMessage[]): Promise<ChatResult> {
@@ -123,7 +123,7 @@ better match actual outcomes, and reports Expected Calibration Error
 (ECE) before/after so you can see the improvement rather than assume it:
 
 ```ts
-import { fitTemperature, evaluateOutOfFold } from "decidr";
+import { fitTemperature, evaluateOutOfFold } from "decidr-ts";
 
 // pairs: [{ decision, correctId }, ...] from decisions you've verified
 const result = fitTemperature(pairs);
@@ -161,6 +161,13 @@ Differences from the Python library, and why:
   uses a small hand-rolled PRNG (mulberry32) for the same purpose --
   reproducible for a given seed, but not bit-identical to Python's
   Mersenne Twister output.
+
+## Docs
+
+- [PREFIX_MATCHING.md](docs/PREFIX_MATCHING.md) — how a multi-token id gets scored from raw logprobs
+- [HIERARCHY.md](docs/HIERARCHY.md) — why option ids form a real tree, and the `exhaustive` tradeoff
+- [NAMING_IDS.md](docs/NAMING_IDS.md) — the id format rules and why each one exists
+- [PROVIDERS.md](docs/PROVIDERS.md) — worked examples for Ollama, OpenAI, and other OpenAI-compatible servers
 
 ## License
 
