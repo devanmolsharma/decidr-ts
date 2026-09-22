@@ -1,0 +1,59 @@
+name: Deploy webui to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "examples/webui/**"
+      - ".github/workflows/deploy-webui.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # The webui depends on the library itself via "decidr-ts": "file:../.."
+      # (see examples/webui/package.json) -- it needs dist/ built first.
+      - name: Install and build the library
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install and build the webui
+        working-directory: examples/webui
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: examples/webui/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

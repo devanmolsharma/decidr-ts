@@ -1,6 +1,5 @@
 node_modules/
 dist/
 *.log
-examples/webui/screenshots/
 examples/wikipedia-navigator/screenshots/
 examples/webui/public/decidr.bundle.js

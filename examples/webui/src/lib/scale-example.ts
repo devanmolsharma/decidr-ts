@@ -1,9 +1,11 @@
+import type { Row } from "decidr-ts";
+
 // Generates a realistic ~150-option support taxonomy as a real 2-level id
 // hierarchy, so the scale demo shows decidr resolving a genuinely large
 // option set via a handful of small races instead of one impossible
 // 150-way race that no top_logprobs window could see all of at once.
 
-const DEPARTMENTS = {
+const DEPARTMENTS: Record<string, string[]> = {
   billing: ["refund", "dispute", "subscription", "invoice", "tax", "proration", "chargeback", "trial", "upgrade", "downgrade"],
   shipping: ["delay", "lost", "damaged", "wrong_item", "customs", "address", "tracking", "carrier", "packaging", "return_label"],
   account: ["login", "password", "twofactor", "email_change", "deletion", "export", "merge", "suspension", "verification", "permissions"],
@@ -21,11 +23,11 @@ const DEPARTMENTS = {
   research: ["survey", "interview", "usability_test", "data_analysis", "competitive_analysis", "market_sizing", "experiment_design", "report_review", "citation", "methodology"],
 };
 
-function describe(dept, sub) {
+function describe(dept: string, sub: string): string {
   return `${sub.replace(/_/g, " ")} issue under the ${dept} department`;
 }
 
-export function buildScaleRow() {
+export function buildScaleRow(): Row {
   const options = [];
   for (const [dept, subs] of Object.entries(DEPARTMENTS)) {
     for (const sub of subs) {
@@ -35,11 +37,9 @@ export function buildScaleRow() {
   return {
     id: "scale-1",
     state:
-      "Internal message: \"The nightly data sync job has been failing for two days, and now the export button " +
-      "in the dashboard is timing out too. A few customers are asking why their reports look stale.\"",
+      'Internal message: "The nightly data sync job has been failing for two days, and now the export button ' +
+      'in the dashboard is timing out too. A few customers are asking why their reports look stale."',
     question: "Which team and category should this be routed to?",
     options,
-    exhaustive: false,
-    correctPrefix: "technical",
   };
 }
