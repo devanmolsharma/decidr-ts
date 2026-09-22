@@ -82,17 +82,43 @@ There's no universal registry of who supports `logprobs` — it changes as provi
 
 ### Providers known to support `logprobs` via an OpenAI-compatible endpoint
 
-Checked against each provider's own documentation, not assumed — but providers change this without notice, so verify with the request above before depending on it in production:
+Checked against each provider's own documentation and, where noted, live measurement — not assumed. Providers change this without notice, so verify with the request above before depending on it in production. An independent research pass across the full landscape (2026) found that of 813 real OpenRouter endpoints tested empirically, only 23% actually returned logprobs when requested — so "OpenAI-compatible" is not a reliable predictor of logprobs support on its own, and every provider below was checked individually:
 
 | Provider | Notes |
 |---|---|
-| OpenAI | Standard chat models only (`gpt-4o` family, `gpt-4.1`); reasoning models (o-series) reject `logprobs`. |
+| OpenAI (direct or Azure OpenAI) | Standard chat models only (`gpt-4o` family, `gpt-4.1`, and similar); reasoning models (o-series, GPT-5.x/6 reasoning variants) reject `logprobs`. Azure has full parity with direct OpenAI here. |
 | Together AI | Documented support for `logprobs`/`top_logprobs`; note `logprobs` and streaming (`stream: true`) are mutually exclusive on their API — `decidr` doesn't stream, so this doesn't affect it. |
-| Groq | OpenAI-compatible endpoint; verify current `top_logprobs` cap before relying on a specific value. |
-| Fireworks AI | OpenAI-compatible endpoint; reported `top_logprobs` cap is lower than OpenAI's (around 5) — this project's backends always request 20, so expect the response to come back capped rather than erroring, which is fine for `decidr`'s mechanism (it just means fewer alternatives to match against per step). |
-| Self-hosted vLLM | Implements the OpenAI-compatible server spec including `logprobs`/`top_logprobs` directly; this is the same shape Together, Fireworks, and several other hosted providers build on. |
+| Fireworks AI | OpenAI-compatible endpoint; `top_logprobs` cap is lower than OpenAI's (around 5, same as Azure) — this project's backends always request 20, so expect the response to come back capped rather than erroring, which is fine for `decidr`'s mechanism (it just means fewer alternatives to match against per step). |
+| Cerebras, NVIDIA NIM | OpenAI-compatible endpoints, documented `logprobs` support. |
+| Self-hosted vLLM | Implements the OpenAI-compatible server spec including `logprobs`/`top_logprobs` directly, plus `prompt_logprobs` (input-token logprobs, not exposed by any hosted provider here) — the most complete logprobs surface of any option in this table. This is the same request shape Together, Fireworks, and several other hosted providers build on. |
+| Self-hosted llama.cpp server | `n_probs` parameter, OpenAI-*similar* (not identical) shape. One real caveat: these are **post-sampling** logprobs, reflecting whatever temperature/top-k/top-p was applied, not the raw model distribution — decidr always requests temperature 0 specifically to make this moot, but it's worth knowing this endpoint's numbers can differ from a raw-logit read in general. |
 
-**Not currently usable**, regardless of routing: Anthropic/Claude (see [above](#anthropic-claude-is-not-currently-reachable)) and any reasoning-focused model on any provider (the API contract is built around a hidden reasoning step instead of a plain next-token distribution, and `logprobs` is typically rejected or ignored as a result).
+**Confirmed NOT usable, corrected from an earlier version of this doc that assumed otherwise:**
+
+| Provider | Verdict |
+|---|---|
+| **Groq** | **Does not support `logprobs` at all.** Groq's own docs state plainly that `logprobs`, `logit_bias`, and `top_logprobs` "are currently not supported and will result in a 400 error if they are supplied." An earlier version of this table listed Groq as supported — that was wrong; do not route decidr through Groq. |
+| xAI (Grok) | Partial and unreliable: documented support up to a small window (0-8), but confirmed silently ignored (no error, no logprobs) on newer models (grok-4.20 and later). Treat as unusable without per-model live verification. |
+| DeepSeek | Not available in "thinking" mode; even in standard mode, V3.2 has been observed returning meaningless placeholder values (`0` or `-9999`) rather than real logprobs or a clear error. Do not trust this provider's logprobs without independently sanity-checking the actual values returned, not just their presence. |
+| Cohere (Chat v2) | Returns a bare `logprobs: true/false`, no `top_logprobs`/rank window at all, and the tokens come back as opaque `token_ids` requiring Cohere's own tokenizer to map back to text — not usable by `decidr`'s mechanism, which needs real token strings to match against option ids. |
+| Google Gemini / Vertex AI | `responseLogprobs`/`logprobs` exist but only on Vertex AI (not the consumer Gemini API), only for non-streaming calls, and disabled entirely on several newer model versions — verify per exact model id before use. |
+| Mistral (La Plateforme) | Not in Mistral's own documented API parameters. (Self-hosted Mistral models served through vLLM do get real logprobs — that's vLLM's support, not Mistral's own API.) |
+| AWS Bedrock (Converse API) | Not in Bedrock's unified Converse schema. `additionalModelRequestFields` theoretically allows passing arbitrary per-model parameters through, but this is undocumented and unverified per model — do not assume it works without testing the specific model. |
+| Anthropic (Claude) | No `logprobs` field anywhere, on any route — see [below](#anthropic-claude-is-not-currently-reachable). |
+
+**Reasoning models on any provider** are a separate, orthogonal exclusion: their API contract is built around a hidden reasoning step instead of a plain next-token distribution, and `logprobs` is typically rejected or ignored as a result, regardless of whether that provider supports logprobs for its standard chat models.
+
+### Gateways and unified multi-provider clients: none solve this reliably
+
+If you're tempted to reach for one client library or gateway to cover many providers at once (LiteLLM, OpenRouter, Vercel AI SDK, LangChain, or similar) instead of picking backends per-provider: don't, for `decidr` specifically. This was checked directly across the landscape, not assumed:
+
+- **LiteLLM** silently drops `logprobs`/`top_logprobs` when routing Ollama through its OpenAI-compatible code path (the root cause is upstream in Ollama's own compatibility layer, not LiteLLM itself — see [below](#litellmbackend-is-not-a-way-to-reach-a-local-ollama)). Its `drop_params` option defaults to `false` (it raises rather than silently dropping) but most real deployments enable it, reintroducing silent drops.
+- **OpenRouter** documents `logprobs` as a normalized parameter, but empirically only ~23% of its endpoints actually honor it, and — confirmed directly — the *same model slug* can route to a logprobs-supporting upstream or a non-supporting one depending purely on which provider OpenRouter's router happens to pick that request, unless you explicitly pin the upstream provider and set `require_parameters: true`. The default behavior on an unsupported route is a normal `200 OK` with `logprobs: null` — no error, no signal anything went wrong.
+- **Vercel AI SDK** removed its normalized cross-provider logprobs support entirely in v5.
+- **LangChain**'s Ollama integration (`ChatOllama`) has a long-standing open, unresolved bug around logprobs.
+- Every general-purpose "unified LLM SDK" checked (PydanticAI, any-llm, Token.js, aisuite) either doesn't normalize logprobs at all, or silently returns `None`/`null` for providers it can't support — the same failure mode as LiteLLM, just less documented.
+
+The common thread: logprobs is a low-traffic feature in every general-purpose abstraction, and it's consistently the first thing dropped or left unverified. An abstraction that silently returns nothing is strictly worse for `decidr` than a direct, provider-specific call that errors loudly — silence produces a confusing failure deep inside a real `decide()` call instead of an immediate, clear one. Build backends against each provider's own official SDK or direct API instead.
 
 ## Anthropic (Claude) is not currently reachable
 
