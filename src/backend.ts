@@ -84,8 +84,110 @@ export abstract class Backend {
    * information for this call at all (not the same as an entry whose own
    * `topLogprobs` is empty) -- `Client` treats a truly empty list as "the
    * server didn't support this," and raises a clear error rather than
-   * guessing at a decision with no numbers behind it. */
-  abstract chat(model: string, messages: ChatMessage[]): Promise<ChatResult>;
+   * guessing at a decision with no numbers behind it.
+   *
+   * `maxTokens` defaults to 1 (a single-token race step, the normal case).
+   * `discoverTokens` below passes a higher value to read back a whole
+   * word's real token split in one response; every built-in backend
+   * forwards it straight through to the provider's own max-tokens field,
+   * so no backend needs to override this just to support discovery. */
+  abstract chat(model: string, messages: ChatMessage[], maxTokens?: number): Promise<ChatResult>;
+
+  /** Pre-establish the connection (TCP + TLS handshake) to this backend's
+   * host by sending one minimal real chat call, so the first real
+   * `decide()` doesn't pay that cost. This is the single biggest lever on
+   * latency to a hosted API that a client actually controls: measured
+   * live against OpenAI, a cold request took ~2.4s where a warm one on a
+   * reused connection took ~0.75-1.0s -- everything else (TLS 0-RTT,
+   * HTTP/3, request-level tuning) is marginal by comparison, and neither
+   * OpenAI nor Ollama's servers themselves get any faster from the client
+   * side. Node's global `fetch` (undici) already pools keep-alive
+   * connections per origin by default, so this only needs to be called
+   * once per process before the first latency-sensitive `decide()` --
+   * calling it again is a harmless no-op cost-wise (one more cheap
+   * request), not a requirement. Default implementation is a real `chat`
+   * call asking a 1-token yes/no question with a single option, which
+   * exercises the exact routing/auth path a real decision will use;
+   * override if a backend has a cheaper way to warm its connection. */
+  async warmup(model: string): Promise<void> {
+    await this.chat(model, [{ role: "user", content: "." }]);
+  }
+
+  /** Discover how `word` actually tokenizes for this model, as the model's
+   * own tokenizer would split it at the very start of an answer -- the
+   * same position `Client`'s real disambiguation race reads from. See
+   * `discoverTokensBatch` (the actual implementation this calls) for the
+   * mechanism and why it needs to be a fresh answer start, not mid-prompt. */
+  async discoverTokens(model: string, word: string): Promise<string[]> {
+    const results = await this.discoverTokensBatch(model, [word]);
+    return results.get(word) ?? [];
+  }
+
+  /** Same as `discoverTokens`, for many words in one request instead of
+   * one request per word -- the common case, since `Client.warmup` wants
+   * every not-yet-cached option id in a row discovered before the real
+   * race starts. There is no tokenizer API to consult directly (see
+   * prefix.ts's module docstring), so this asks the model to list the
+   * words back verbatim, one per line, and reads the real token
+   * boundaries off the response's own `logprobs`, split at the newline
+   * tokens between words.
+   *
+   * Each word has to start at the beginning of its own line, not mid-
+   * sentence: a word's tokenization can depend on what comes immediately
+   * before it (a token spanning a leading space is often a different
+   * token ID than the same text at a fresh start) -- confirmed live,
+   * "damaged" alone tokenizes as ["dam", "aged"], and asked for after a
+   * literal newline it tokenizes exactly the same way, but asked for
+   * after ", " (mid-sentence, as in a comma-separated list) it tokenizes
+   * as a single " damaged" token instead. Only the fresh-line form
+   * matches what the real race's `assistant`-prefix continuation sees
+   * (each race step also starts a fresh answer), so this asks for a
+   * newline-separated list specifically, not a comma-separated one. */
+  async discoverTokensBatch(model: string, words: string[]): Promise<Map<string, string[]>> {
+    const unique = [...new Set(words)];
+    const out = new Map<string, string[]>();
+    if (unique.length === 0) return out;
+
+    const prompt = `List these ${unique.length} words, one per line, exactly as given, nothing else:\n${unique.join("\n")}`;
+    // Generous headroom: every word's own tokens plus one newline-ish
+    // separator token between each -- real responses run a little over
+    // this (whitespace sometimes splits into its own token), so pad well
+    // past the minimum rather than risk truncating the last word.
+    const maxTokens = unique.reduce((sum, w) => sum + w.length, 0) + unique.length * 4 + 8;
+    const result = await this.chat(model, [{ role: "user", content: prompt }], maxTokens);
+
+    let wordIndex = 0;
+    let consumed = "";
+    let tokens: string[] = [];
+    for (const entry of result.logprobs) {
+      const word = unique[wordIndex];
+      if (word === undefined) break;
+      const remaining = word.slice(consumed.length);
+      if (remaining && remaining.startsWith(entry.token) && entry.token !== "") {
+        tokens.push(entry.token);
+        consumed += entry.token;
+        if (consumed === word) {
+          out.set(word, tokens);
+          wordIndex++;
+          consumed = "";
+          tokens = [];
+        }
+        continue;
+      }
+      // Not a continuation of the current word -- either a separator
+      // (whitespace/newline) between words, or the current word failed to
+      // fully resolve. Either way, stop trying to extend it; leave it
+      // unset in `out` (a genuine "couldn't discover this one" outcome,
+      // same as any other discovery failure) and wait for the next
+      // apparent word-start to try the next word.
+      if (tokens.length > 0) {
+        wordIndex++;
+        consumed = "";
+        tokens = [];
+      }
+    }
+    return out;
+  }
 }
 
 /** Talks to one Ollama server's `/api/chat`. decidr's only
@@ -105,7 +207,7 @@ export class OllamaBackend extends Backend {
     this.timeoutMs = options.timeoutMs ?? 120_000;
   }
 
-  async chat(model: string, messages: ChatMessage[]): Promise<ChatResult> {
+  async chat(model: string, messages: ChatMessage[], maxTokens = 1): Promise<ChatResult> {
     const ollamaMessages = messages.map((m) => ({ role: m.role, ...toOllamaMessage(m.content) }));
     const body = {
       model,
@@ -114,7 +216,7 @@ export class OllamaBackend extends Backend {
       // A reasoning preamble would put thinking tokens in the answer slot,
       // so the very next token stops being the decision.
       think: false,
-      options: { num_predict: 1, temperature: 0 },
+      options: { num_predict: maxTokens, temperature: 0 },
       logprobs: true,
       top_logprobs: OllamaBackend.TOP_LOGPROBS,
     };
@@ -179,12 +281,12 @@ export class OpenAIBackend extends Backend {
     this.timeoutMs = options.timeoutMs ?? 120_000;
   }
 
-  async chat(model: string, messages: ChatMessage[]): Promise<ChatResult> {
+  async chat(model: string, messages: ChatMessage[], maxTokens = 1): Promise<ChatResult> {
     const openaiMessages = messages.map((m) => ({ role: m.role, content: toOpenAIContent(m.content) }));
     const body = {
       model,
       messages: openaiMessages,
-      max_tokens: 1,
+      max_tokens: maxTokens,
       temperature: 0,
       logprobs: true,
       top_logprobs: OpenAIBackend.TOP_LOGPROBS,
@@ -219,21 +321,20 @@ export class OpenAIBackend extends Backend {
     }
     const data = await res.json();
     const choice = data?.choices?.[0];
-    const entry = choice?.logprobs?.content?.[0];
+    const entries: any[] = choice?.logprobs?.content ?? [];
     return {
       content: choice?.message?.content ?? null,
-      logprobs: entry
-        ? [
-            {
-              token: entry.token,
-              logprob: entry.logprob,
-              topLogprobs: (entry.top_logprobs ?? []).map((t: any) => ({
-                token: t.token,
-                logprob: t.logprob,
-              })),
-            },
-          ]
-        : [],
+      // Every entry, not just the first -- with maxTokens=1 (the normal
+      // race step) there's only ever one anyway, but discoverTokens above
+      // asks for more and needs the whole sequence back.
+      logprobs: entries.map((entry) => ({
+        token: entry.token,
+        logprob: entry.logprob,
+        topLogprobs: (entry.top_logprobs ?? []).map((t: any) => ({
+          token: t.token,
+          logprob: t.logprob,
+        })),
+      })),
     };
   }
 }

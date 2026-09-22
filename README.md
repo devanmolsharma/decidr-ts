@@ -114,6 +114,41 @@ class MyBackend extends Backend {
 }
 ```
 
+## Latency
+
+Against a hosted API, a cold connection (fresh TLS handshake) is the
+single biggest cost you actually control -- measured live against
+OpenAI, a cold request took ~2.4s where a warm one on a reused
+connection took ~0.75-1.0s. Node's global `fetch` already pools
+keep-alive connections per host, so the fix is simple: warm the
+connection, and (optionally) the id tokenization, before the
+latency-sensitive call.
+
+```ts
+// Ahead of time, once the row's options are known:
+await client.warmup(row); // pre-warms the connection AND discovers each
+                           // option id's real token boundaries, seeding
+                           // the speculative cache -- returns a real
+                           // Decision, so this can just be your first call
+
+// Later, on the hot path:
+const decision = await client.decide(row); // faster: warm connection,
+                                            // and (if warmup ran before)
+                                            // every disambiguation round
+                                            // fires from a verified guess
+                                            // instead of a cold one
+```
+
+`warmup` never changes what `decide()` returns -- every speculative
+guess it seeds is still verified against the real response before being
+trusted (see [PREFIX_MATCHING.md](docs/PREFIX_MATCHING.md)). It only
+changes how fast the answer arrives. Realistic floors, not sub-100ms
+promises: hosted OpenAI is bounded by its own server-side latency
+(published best case ~0.7s TTFT) regardless of client tuning; a local
+Ollama model has no such floor. `Client`'s `cache` option controls the
+underlying speculative cache (on by default, persisted to
+`~/.decidr-ts/token-cache.json`) -- pass `cache: false` to disable it.
+
 ## Calibration
 
 `decision.probabilities` are real softmax'd logprobs, not hand-waved

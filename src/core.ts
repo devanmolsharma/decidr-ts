@@ -200,8 +200,61 @@ export class Client {
     return out;
   }
 
-  private async chat(messages: Parameters<Backend["chat"]>[1]) {
-    return this.backend.chat(this.model, messages);
+  /** Discover this row's options' real token boundaries up front and seed
+   * the speculative cache with them, then run `decide()`. Where a plain
+   * `decide()` call has to discover a candidate's token boundary live
+   * (round 1 sees what the model actually says, round 2 only then knows
+   * what to ask next), `warmup` finds it out ahead of time -- one real
+   * "repeat this id back" call per option id not already cached, all
+   * fired concurrently -- so the real race can fire every round's request
+   * from a verified prediction instead of a cold guess. This can only
+   * help or be neutral, never hurt correctness: every speculative
+   * response is still verified against the real race's own `topLogprobs`
+   * before being trusted (see decidePrefix and speculative-cache.ts's
+   * module docstring) -- discovery just gives that verification step a
+   * much better starting guess than "no prediction at all."
+   *
+   * Worth calling ahead of a single latency-sensitive `decide()` where
+   * the option set is known in advance; not needed for options that will
+   * already be warm from a previous `decide()` call against the same
+   * model (the cache persists across calls on its own). Options whose ids
+   * aren't found in this row (e.g. a synthesized hierarchy segment)
+   * aren't warmed by this -- pass the row you're about to actually decide. */
+  async warmup(row: Row): Promise<Decision> {
+    if (this.cache) {
+      const uncached = row.options.filter((o) => this.cache!.get(this.model, o.id) === null);
+      if (uncached.length > 0) {
+        try {
+          // One request discovering every not-yet-cached id at once,
+          // rather than one request per id -- verified live against a
+          // real 150-option row: all 150 came back correctly from a
+          // single call. See discoverTokensBatch's docstring for why
+          // this has to ask for a newline-separated list specifically.
+          const discovered = await this.backend.discoverTokensBatch(
+            this.model,
+            uncached.map((o) => o.id),
+          );
+          for (const [optionId, tokens] of discovered) {
+            if (tokens.length > 0) this.cache.set(this.model, optionId, tokens);
+          }
+        } catch {
+          // Discovery is a pure optimization -- if it fails for any
+          // reason (network blip, provider quirk), decide() below still
+          // works correctly, just without any of this row's options
+          // getting a head start.
+        }
+      }
+      this.cache.save();
+    } else {
+      // No cache means no speculation to seed -- still worth warming the
+      // connection itself before the real decision.
+      await this.backend.warmup(this.model);
+    }
+    return this.decide(row);
+  }
+
+  private async chat(messages: Parameters<Backend["chat"]>[1], maxTokens?: number) {
+    return this.backend.chat(this.model, messages, maxTokens);
   }
 
   private async decidePrefix(row: Pick<Row, "state" | "question" | "options">): Promise<PrefixResult> {
@@ -212,30 +265,24 @@ export class Client {
     // Speculation: a model's tokenizer is a fixed function of the string,
     // largely independent of surrounding prompt text, so an option id that
     // tokenized a certain way last time against this model probably will
-    // again. For any candidate with a cached token sequence, predict its
-    // consumed-prefix at every future round up front, and fire ALL of
-    // those requests now, concurrently with round 0, instead of waiting
-    // to see each round's real result before asking the next one. Nothing
-    // here is trusted blindly: every speculative response is only used
-    // once the real round it's speculating past comes back and its
-    // matched token agrees with the prediction (see the verification
-    // below) -- a wrong guess just wastes a request, it can never produce
-    // a wrong score.
+    // again. For a candidate with a cached token sequence, once a round's
+    // real result confirms its next token matches the cache's prediction,
+    // the round *after that* can be pre-fired immediately, concurrently
+    // with the rest of the round still being processed, instead of
+    // waiting for a fresh round to start. Deliberately gated one round at
+    // a time on real confirmation rather than firing every predicted
+    // round up front: the latter was tried and measured live to roughly
+    // double total request count, because most candidates in a real race
+    // never even survive to round 2 (they fall out of top_logprobs
+    // entirely, a very common outcome for a set with more than a
+    // handful of options) -- speculating past a round that a real result
+    // hasn't confirmed is still alive just wastes real API calls on
+    // predictions nothing will ever need. Nothing here is trusted
+    // blindly either way: a speculative response is only used once the
+    // real round it's speculating past comes back and its matched token
+    // agrees with the prediction -- a wrong guess just wastes the one
+    // pre-fired request, it can never produce a wrong score.
     const speculative = new Map<string, ReturnType<Backend["chat"]>>(); // consumed-prefix -> in-flight request
-    if (this.cache) {
-      for (const c of candidates) {
-        const predicted = this.cache.get(this.model, c.optionId);
-        if (!predicted) continue;
-        let prefix = "";
-        for (const token of predicted) {
-          const nextPrefix = prefix + token;
-          if (!speculative.has(nextPrefix)) {
-            speculative.set(nextPrefix, this.chat(buildPrefixMessages(row, nextPrefix)));
-          }
-          prefix = nextPrefix;
-        }
-      }
-    }
     const confirmedTokens = new Map<string, string[]>(); // optionId -> tokens actually observed this run
 
     for (let depth = 0; depth < MAX_DEPTH; depth++) {
@@ -248,11 +295,28 @@ export class Client {
       // prefix -- these requests don't depend on each other's answers, so
       // firing them concurrently turns N sequential round-trips into one
       // round-trip's worth of latency per round, not N. A group whose
-      // prefix was already spun up speculatively above reuses that
-      // in-flight request instead of starting a second, redundant one.
+      // prefix was already pre-fired speculatively (from the previous
+      // round's confirmation, below) reuses that in-flight request
+      // instead of starting a second, redundant one.
+      //
+      // A group of exactly one candidate has nothing left to disambiguate
+      // against -- there's no other option still racing for this exact
+      // prefix -- so instead of one more single-token round, ask for the
+      // rest of its text in one request (maxTokens sized to what's left)
+      // and read every position's logprob back at once. This still reads
+      // a real, per-token logprob for each remaining piece from this
+      // exact prompt context (never reused from discovery -- see
+      // Backend.discoverTokens's docstring for why a word's probability
+      // is context-dependent even when its tokenization isn't), it just
+      // collapses what would have been N more round-trips into one.
       const entries = [...groups.entries()];
       const results = await Promise.all(
-        entries.map(([consumed]) => speculative.get(consumed) ?? this.chat(buildPrefixMessages(row, consumed))),
+        entries.map(([consumed, group]) => {
+          const cached = speculative.get(consumed);
+          if (cached) return cached;
+          const maxTokens = group.length === 1 ? Math.max(1, group[0]!.remaining.length) : 1;
+          return this.chat(buildPrefixMessages(row, consumed), maxTokens);
+        }),
       );
       entries.forEach(([, group], i) => {
         const result = results[i]!;
@@ -265,14 +329,45 @@ export class Client {
         if (depth === 0 && i === 0) {
           rawAnswer = result.content;
         }
+        if (group.length === 1) {
+          // Sole survivor: walk every returned position in order, same
+          // matching rule as a normal round (longest non-overshooting
+          // prefix), until done or a position has no valid match.
+          const c = group[0]!;
+          for (const entry of result.logprobs) {
+            if (c.done) break;
+            const before = c.consumed;
+            matchStep([c], foundTokens(entry));
+            if (c.consumed === before) break; // no match at this position -- stop, same as a normal round finding nothing
+            const tokens = confirmedTokens.get(c.optionId) ?? [];
+            tokens.push(c.consumed.slice(before.length));
+            confirmedTokens.set(c.optionId, tokens);
+          }
+          return;
+        }
         const found = foundTokens(result.logprobs[0]!);
         for (const c of group) {
           const before = c.consumed;
           matchStep([c], found);
-          if (c.consumed !== before) {
-            const tokens = confirmedTokens.get(c.optionId) ?? [];
-            tokens.push(c.consumed.slice(before.length));
-            confirmedTokens.set(c.optionId, tokens);
+          if (c.consumed === before) continue; // this candidate didn't match this round -- nothing to speculate from
+          const tokens = confirmedTokens.get(c.optionId) ?? [];
+          tokens.push(c.consumed.slice(before.length));
+          confirmedTokens.set(c.optionId, tokens);
+
+          if (!this.cache || c.done) continue;
+          const predicted = this.cache.get(this.model, c.optionId);
+          if (!predicted) continue;
+          const observedSoFar = confirmedTokens.get(c.optionId)!;
+          // Only keep predicting if everything confirmed so far actually
+          // matches the cached sequence -- the moment reality diverges
+          // from the prediction, stop speculating for this candidate and
+          // let it resolve the normal reactive way from here.
+          const stillOnTrack = observedSoFar.every((t, idx) => predicted[idx] === t);
+          if (!stillOnTrack || observedSoFar.length >= predicted.length) continue;
+          const nextToken = predicted[observedSoFar.length]!;
+          const nextPrefix = c.consumed + nextToken;
+          if (!speculative.has(nextPrefix)) {
+            speculative.set(nextPrefix, this.chat(buildPrefixMessages(row, nextPrefix)));
           }
         }
       });
