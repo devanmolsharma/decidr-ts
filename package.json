@@ -11,13 +11,24 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:browser": "esbuild src/index.ts --bundle --format=esm --platform=browser --external:./node-cache-store.js --outfile=examples/webui/public/decidr.bundle.js",
     "test": "node --test --import tsx tests/**/*.test.ts",
     "prepublishOnly": "npm run build && npm test"
   },
-  "keywords": ["llm", "ollama", "openai", "classification", "routing", "logprobs", "decisions"],
+  "keywords": [
+    "llm",
+    "ollama",
+    "openai",
+    "classification",
+    "routing",
+    "logprobs",
+    "decisions"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -27,8 +38,10 @@
     "node": ">=18"
   },
   "devDependencies": {
-    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.2",
+    "playwright": "^1.63.0",
     "tsx": "^4.19.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.6.0"
   }
 }
