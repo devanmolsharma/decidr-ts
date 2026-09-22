@@ -93,6 +93,17 @@ explored further show up in `decision.eliminated`, not
 const client = new Client("qwen3.5:4b", { exhaustive: false });
 ```
 
+Separately from `exhaustive`, decidr-ts also stops walking an individual
+option's id the moment it's the only candidate left racing for its
+current prefix -- there's nothing else it could still be confused with,
+so paying for more requests to spell out the rest of its id isn't worth
+it by default. That option is still scored (it's in
+`decision.probabilities`, not `decision.unscored`) and shows up in
+`decision.stoppedEarly`, but on a partial rather than a full
+log-probability -- see [PREFIX_MATCHING.md](docs/PREFIX_MATCHING.md#stopping-early-the-actual-default)
+for what that trades away. Measured live: an 8-option race with several
+similar ids went from 5 requests to 1.
+
 ## Backends
 
 | Backend | Talks to | Dependencies |
@@ -174,6 +185,15 @@ const oof = evaluateOutOfFold(pairs, 5);
 
 Differences from the Python library, and why:
 
+- **Stops early by default.** The biggest behavioral divergence: Python
+  always walks every option's id to full completion before scoring it,
+  for strict comparability across options resolved at different depths.
+  decidr-ts stops the moment an option has no more competition for its
+  current prefix, trading that strict comparability for far fewer
+  requests -- see [PREFIX_MATCHING.md](docs/PREFIX_MATCHING.md#stopping-early-the-actual-default).
+  There's currently no flag to opt back into Python's behavior in
+  decidr-ts; use the Python library if that guarantee matters more to
+  you than request count.
 - **Backends.** Python ships `OllamaBackend` (stdlib only) and
   `LiteLLMBackend` (optional extra, for everything LiteLLM supports --
   notably *not* Ollama's logprobs, which LiteLLM doesn't forward). The TS

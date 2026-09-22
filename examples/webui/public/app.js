@@ -87,11 +87,14 @@ function renderBars(probabilities, choice, container) {
   }
 }
 
-function tagListHtml(unscored, eliminated) {
-  if (!unscored.length && !eliminated.length) return "";
+function tagListHtml(unscored, eliminated, stoppedEarly = []) {
+  if (!unscored.length && !eliminated.length && !stoppedEarly.length) return "";
   const parts = [];
   for (const id of unscored) {
     parts.push(`<span class="text-[11px] px-2 py-0.5 rounded-full bg-panel2 border border-warn/30 text-warn">unscored: ${id}</span>`);
+  }
+  for (const id of stoppedEarly) {
+    parts.push(`<span class="text-[11px] px-2 py-0.5 rounded-full bg-panel2 border border-accent2/30 text-accent2">stopped early: ${id}</span>`);
   }
   for (const id of eliminated) {
     parts.push(`<span class="text-[11px] px-2 py-0.5 rounded-full bg-panel2 border border-border text-dim">eliminated: ${id}</span>`);
@@ -195,7 +198,7 @@ function renderRowExample(ex) {
         <span>confidence: <b class="text-slate-100 font-mono">${fmtPct(decision.probabilities.get(decision.choice) ?? 0)}</b></span>
         ${ex.row.correctId ? `<span>${decision.choice === ex.row.correctId ? "correct!" : "wrong -- correct is " + ex.row.correctId}</span>` : ""}
       `;
-      resultEl.insertAdjacentHTML("beforeend", tagListHtml(decision.unscored, decision.eliminated));
+      resultEl.insertAdjacentHTML("beforeend", tagListHtml(decision.unscored, decision.eliminated, decision.stoppedEarly));
 
       if (ex.row.board) {
         const cells = document.querySelectorAll("[data-cell]");

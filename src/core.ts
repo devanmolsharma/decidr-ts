@@ -161,6 +161,7 @@ interface PrefixResult {
   choice: string;
   probabilities: Map<string, number>;
   unscored: string[];
+  stoppedEarly: string[];
   rawAnswer: string | null;
 }
 
@@ -291,6 +292,34 @@ export class Client {
         exceededDepth = false;
         break;
       }
+
+      // The moment a candidate is the only one left racing for its
+      // current prefix, there's nothing left to *disambiguate* -- no
+      // other option is still competing for that exact text. Stop there
+      // and score it on its logprobSum as accumulated so far, rather than
+      // spending more requests spelling out the rest of its id.
+      //
+      // This is the library's default speed/fairness tradeoff, made
+      // deliberately: it means candidates that finish in fewer chain-rule
+      // terms (a short id, or one that diverges from its rivals early)
+      // can end up with a numerically larger probability than one that
+      // needed to be resolved in full -- P(a short prefix) isn't the same
+      // quantity as P(a full multi-token word), so stopping early gives
+      // up strict comparability across options that needed different
+      // amounts of disambiguation, in exchange for far fewer requests.
+      // See docs/PREFIX_MATCHING.md for the full fairness argument this
+      // knowingly trades away, and `Candidate.stoppedEarly` for how a
+      // caller can tell which options in a `Decision` were cut short.
+      for (const [consumed, group] of groups) {
+        if (group.length !== 1) continue;
+        group[0]!.stoppedEarly = true;
+        groups.delete(consumed);
+      }
+      if (groups.size === 0) {
+        exceededDepth = false;
+        break;
+      }
+
       // Every group in a round asks about a different, already-diverged
       // prefix -- these requests don't depend on each other's answers, so
       // firing them concurrently turns N sequential round-trips into one
@@ -298,25 +327,9 @@ export class Client {
       // prefix was already pre-fired speculatively (from the previous
       // round's confirmation, below) reuses that in-flight request
       // instead of starting a second, redundant one.
-      //
-      // A group of exactly one candidate has nothing left to disambiguate
-      // against -- there's no other option still racing for this exact
-      // prefix -- so instead of one more single-token round, ask for the
-      // rest of its text in one request (maxTokens sized to what's left)
-      // and read every position's logprob back at once. This still reads
-      // a real, per-token logprob for each remaining piece from this
-      // exact prompt context (never reused from discovery -- see
-      // Backend.discoverTokens's docstring for why a word's probability
-      // is context-dependent even when its tokenization isn't), it just
-      // collapses what would have been N more round-trips into one.
       const entries = [...groups.entries()];
       const results = await Promise.all(
-        entries.map(([consumed, group]) => {
-          const cached = speculative.get(consumed);
-          if (cached) return cached;
-          const maxTokens = group.length === 1 ? Math.max(1, group[0]!.remaining.length) : 1;
-          return this.chat(buildPrefixMessages(row, consumed), maxTokens);
-        }),
+        entries.map(([consumed]) => speculative.get(consumed) ?? this.chat(buildPrefixMessages(row, consumed))),
       );
       entries.forEach(([, group], i) => {
         const result = results[i]!;
@@ -328,22 +341,6 @@ export class Client {
         }
         if (depth === 0 && i === 0) {
           rawAnswer = result.content;
-        }
-        if (group.length === 1) {
-          // Sole survivor: walk every returned position in order, same
-          // matching rule as a normal round (longest non-overshooting
-          // prefix), until done or a position has no valid match.
-          const c = group[0]!;
-          for (const entry of result.logprobs) {
-            if (c.done) break;
-            const before = c.consumed;
-            matchStep([c], foundTokens(entry));
-            if (c.consumed === before) break; // no match at this position -- stop, same as a normal round finding nothing
-            const tokens = confirmedTokens.get(c.optionId) ?? [];
-            tokens.push(c.consumed.slice(before.length));
-            confirmedTokens.set(c.optionId, tokens);
-          }
-          return;
         }
         const found = foundTokens(result.logprobs[0]!);
         for (const c of group) {
@@ -384,10 +381,11 @@ export class Client {
     if (this.cache) {
       for (const c of candidates) {
         // Only cache a genuinely complete resolution -- a candidate that
-        // went unscored partway through didn't finish tokenizing, and
-        // caching a partial sequence would make next run's prediction
-        // wrong on purpose.
-        if (c.unscoredReason === null) {
+        // went unscored, or stopped early as a sole survivor, didn't
+        // finish tokenizing (its `remaining` isn't fully consumed), and
+        // caching a partial sequence would make next run's speculative
+        // prediction wrong on purpose.
+        if (c.unscoredReason === null && !c.stoppedEarly && c.remaining === "") {
           const tokens = confirmedTokens.get(c.optionId);
           if (tokens) this.cache.set(this.model, c.optionId, tokens);
         }
@@ -397,9 +395,11 @@ export class Client {
 
     const logprobs = new Map<string, number>();
     const unscored: string[] = [];
+    const stoppedEarly: string[] = [];
     for (const c of candidates) {
       if (c.unscoredReason === null) {
         logprobs.set(c.optionId, c.logprobSum);
+        if (c.stoppedEarly) stoppedEarly.push(c.optionId);
       } else {
         unscored.push(c.optionId);
       }
@@ -422,13 +422,14 @@ export class Client {
       if (probabilities.get(id)! > probabilities.get(choice)!) choice = id;
     }
 
-    return { choice, probabilities, unscored, rawAnswer };
+    return { choice, probabilities, unscored, stoppedEarly, rawAnswer };
   }
 
   private async decideTree(row: Row): Promise<Decision> {
     const probabilities = new Map<string, number>();
     const eliminated: string[] = [];
     const unscored: string[] = [];
+    const stoppedEarly: string[] = [];
     const rawAnswerHolder: { value: string | null } = { value: null };
 
     const explore = async (node: TreeNode, pathLogprob: number): Promise<void> => {
@@ -467,6 +468,13 @@ export class Client {
           unscored.push(...leafIds(child));
           continue;
         }
+        // This segment's own probability at this level was itself cut
+        // short (see decidePrefix's stoppedEarly) -- every leaf reached
+        // through it inherits that same partial-probability caveat, even
+        // if the leaf itself, one level further down, resolves in full.
+        if (d.stoppedEarly.includes(seg)) {
+          stoppedEarly.push(...leafIds(child));
+        }
         const branchLogprob = pathLogprob + Math.log(d.probabilities.get(seg)!);
         const isWinner = seg === d.choice;
         const isFreeLeaf = child.options.length === 1;
@@ -504,6 +512,7 @@ export class Client {
       mode: "prefix",
       unscored,
       eliminated,
+      stoppedEarly,
       rawAnswer: rawAnswerHolder.value,
     };
   }

@@ -31,6 +31,13 @@ export class Candidate {
   logprobSum = 0;
   consumed = "";
   unscoredReason: string | null = null;
+  /** Set when this candidate stopped before `remaining` was fully
+   * consumed because it became the sole survivor in its group -- a real,
+   * genuine partial logprobSum, not a measurement gap (see
+   * `unscoredReason`), but not a full P(id | prompt) either. See
+   * core.ts's decidePrefix and docs/PREFIX_MATCHING.md for what this
+   * trades away. */
+  stoppedEarly = false;
 
   constructor(optionId: string, remaining: string) {
     this.optionId = optionId;
@@ -38,7 +45,7 @@ export class Candidate {
   }
 
   get done(): boolean {
-    return this.remaining === "" || this.unscoredReason !== null;
+    return this.remaining === "" || this.unscoredReason !== null || this.stoppedEarly;
   }
 }
 

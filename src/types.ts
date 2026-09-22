@@ -45,6 +45,13 @@ export interface Decision {
   /** Options under a hierarchy branch that lost a race but weren't
    * explored further (only with `exhaustive: false`) -- not a gap. */
   eliminated: string[];
+  /** Options scored on a partial probability -- they became the sole
+   * candidate left racing for their prefix and were stopped there rather
+   * than resolved to the end of their own id. A real, genuine partial
+   * logprob (not a gap, hence not in `unscored`), but not a full,
+   * strictly comparable P(id | prompt) either -- see
+   * docs/PREFIX_MATCHING.md for what this trades speed for. */
+  stoppedEarly: string[];
   /** The model's own first reply, for debugging. */
   rawAnswer: string | null;
 }
