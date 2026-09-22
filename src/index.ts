@@ -8,6 +8,8 @@ export {
 } from "./calibrate.js";
 export type { CalibrationPair, CalibrationResult } from "./calibrate.js";
 export { buildPrefixMessages } from "./prefix.js";
+export { TokenCache } from "./speculative-cache.js";
+export type { TokenCacheData, TokenCacheOptions } from "./speculative-cache.js";
 export { confidence, isReliable } from "./types.js";
 export type {
   ChatMessage,

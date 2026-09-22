@@ -23,6 +23,7 @@ import {
   MAX_DEPTH,
   TreeNode,
 } from "./prefix.js";
+import { TokenCache, type TokenCacheOptions } from "./speculative-cache.js";
 import type { ContentBlock, Decision, LogprobEntry, Row } from "./types.js";
 
 export { DecisionError } from "./backend.js";
@@ -148,6 +149,12 @@ export interface ClientOptions {
   temperature?: number;
   backend?: Backend;
   exhaustive?: boolean;
+  /** Speculative token-boundary cache: options to build one internally, an
+   * existing `TokenCache` to reuse (e.g. shared across several `Client`s
+   * against the same model), or `false` to disable speculation entirely
+   * (every request stays purely reactive). See speculative-cache.ts.
+   * Defaults to an on-disk cache at ~/.decidr-ts/token-cache.json. */
+  cache?: TokenCacheOptions | TokenCache | false;
 }
 
 interface PrefixResult {
@@ -162,6 +169,7 @@ export class Client {
   readonly temperature: number;
   readonly backend: Backend;
   readonly exhaustive: boolean;
+  private readonly cache: TokenCache | null;
 
   constructor(model: string, options: ClientOptions = {}) {
     this.model = model;
@@ -170,6 +178,13 @@ export class Client {
     this.backend =
       options.backend ??
       new OllamaBackend({ host: options.host ?? DEFAULT_HOST, timeoutMs: options.timeoutMs });
+    if (options.cache === false) {
+      this.cache = null;
+    } else if (options.cache instanceof TokenCache) {
+      this.cache = options.cache;
+    } else {
+      this.cache = new TokenCache(options.cache);
+    }
   }
 
   async decide(row: Row): Promise<Decision> {
@@ -194,29 +209,73 @@ export class Client {
     let rawAnswer: string | null = null;
     let exceededDepth = true;
 
+    // Speculation: a model's tokenizer is a fixed function of the string,
+    // largely independent of surrounding prompt text, so an option id that
+    // tokenized a certain way last time against this model probably will
+    // again. For any candidate with a cached token sequence, predict its
+    // consumed-prefix at every future round up front, and fire ALL of
+    // those requests now, concurrently with round 0, instead of waiting
+    // to see each round's real result before asking the next one. Nothing
+    // here is trusted blindly: every speculative response is only used
+    // once the real round it's speculating past comes back and its
+    // matched token agrees with the prediction (see the verification
+    // below) -- a wrong guess just wastes a request, it can never produce
+    // a wrong score.
+    const speculative = new Map<string, ReturnType<Backend["chat"]>>(); // consumed-prefix -> in-flight request
+    if (this.cache) {
+      for (const c of candidates) {
+        const predicted = this.cache.get(this.model, c.optionId);
+        if (!predicted) continue;
+        let prefix = "";
+        for (const token of predicted) {
+          const nextPrefix = prefix + token;
+          if (!speculative.has(nextPrefix)) {
+            speculative.set(nextPrefix, this.chat(buildPrefixMessages(row, nextPrefix)));
+          }
+          prefix = nextPrefix;
+        }
+      }
+    }
+    const confirmedTokens = new Map<string, string[]>(); // optionId -> tokens actually observed this run
+
     for (let depth = 0; depth < MAX_DEPTH; depth++) {
       const groups = groupByContext(candidates);
       if (groups.size === 0) {
         exceededDepth = false;
         break;
       }
-      let first = true;
-      for (const [consumed, group] of groups) {
-        const messages = buildPrefixMessages(row, consumed);
-        const result = await this.chat(messages);
+      // Every group in a round asks about a different, already-diverged
+      // prefix -- these requests don't depend on each other's answers, so
+      // firing them concurrently turns N sequential round-trips into one
+      // round-trip's worth of latency per round, not N. A group whose
+      // prefix was already spun up speculatively above reuses that
+      // in-flight request instead of starting a second, redundant one.
+      const entries = [...groups.entries()];
+      const results = await Promise.all(
+        entries.map(([consumed]) => speculative.get(consumed) ?? this.chat(buildPrefixMessages(row, consumed))),
+      );
+      entries.forEach(([, group], i) => {
+        const result = results[i]!;
         if (result.logprobs.length === 0) {
           for (const c of group) {
             c.unscoredReason = "server returned no logprobs for this step";
           }
-          continue;
+          return;
         }
-        if (first && depth === 0) {
+        if (depth === 0 && i === 0) {
           rawAnswer = result.content;
-          first = false;
         }
         const found = foundTokens(result.logprobs[0]!);
-        matchStep(group, found);
-      }
+        for (const c of group) {
+          const before = c.consumed;
+          matchStep([c], found);
+          if (c.consumed !== before) {
+            const tokens = confirmedTokens.get(c.optionId) ?? [];
+            tokens.push(c.consumed.slice(before.length));
+            confirmedTokens.set(c.optionId, tokens);
+          }
+        }
+      });
     }
 
     if (exceededDepth) {
@@ -225,6 +284,20 @@ export class Client {
           c.unscoredReason = `exceeded max disambiguation depth (${MAX_DEPTH})`;
         }
       }
+    }
+
+    if (this.cache) {
+      for (const c of candidates) {
+        // Only cache a genuinely complete resolution -- a candidate that
+        // went unscored partway through didn't finish tokenizing, and
+        // caching a partial sequence would make next run's prediction
+        // wrong on purpose.
+        if (c.unscoredReason === null) {
+          const tokens = confirmedTokens.get(c.optionId);
+          if (tokens) this.cache.set(this.model, c.optionId, tokens);
+        }
+      }
+      this.cache.save();
     }
 
     const logprobs = new Map<string, number>();
@@ -289,6 +362,11 @@ export class Client {
         rawAnswerHolder.value = d.rawAnswer;
       }
 
+      // Every branch explored here (the winner, and every other branch
+      // when exhaustive) is independent of its siblings -- none of them
+      // read a result the others produced -- so they run concurrently
+      // instead of paying for each branch's requests one at a time.
+      const toExplore: Promise<void>[] = [];
       for (const [seg, child] of node.children) {
         if (d.unscored.includes(seg)) {
           unscored.push(...leafIds(child));
@@ -298,11 +376,12 @@ export class Client {
         const isWinner = seg === d.choice;
         const isFreeLeaf = child.options.length === 1;
         if (isWinner || this.exhaustive || isFreeLeaf) {
-          await explore(child, branchLogprob);
+          toExplore.push(explore(child, branchLogprob));
         } else {
           eliminated.push(...leafIds(child));
         }
       }
+      await Promise.all(toExplore);
     };
 
     const root = buildTree(row.options);

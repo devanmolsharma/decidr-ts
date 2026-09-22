@@ -139,7 +139,7 @@ function flatRow(): Row {
 
 test("Client.decide: flat options, single round, picks the winner", async () => {
   const backend = new FakeBackend(() => singleTokenReply("billing", -0.1, [["bug", -2.0]]));
-  const client = new Client("test-model", { backend });
+  const client = new Client("test-model", { backend, cache: false });
   const decision = await client.decide(flatRow());
   assert.equal(decision.choice, "billing");
   assert.ok(decision.probabilities.get("billing")! > decision.probabilities.get("bug")!);
@@ -172,7 +172,7 @@ test("Client.decide: hierarchy explores both branches when exhaustive (default)"
     }
     throw new Error(`unexpected prompt: ${user}`);
   });
-  const client = new Client("test-model", { backend, exhaustive: true });
+  const client = new Client("test-model", { backend, exhaustive: true, cache: false });
   const decision = await client.decide(row);
   assert.equal(decision.choice, "billing_refund");
   // exhaustive: every leaf gets a real probability, nothing eliminated
@@ -202,7 +202,7 @@ test("Client.decide: non-exhaustive leaves losing branch in eliminated", async (
     }
     throw new Error(`unexpected prompt (should not explore losing branch): ${user}`);
   });
-  const client = new Client("test-model", { backend, exhaustive: false });
+  const client = new Client("test-model", { backend, exhaustive: false, cache: false });
   const decision = await client.decide(row);
   assert.equal(decision.choice, "billing_refund");
   assert.equal(decision.probabilities.size, 2);
@@ -211,7 +211,7 @@ test("Client.decide: non-exhaustive leaves losing branch in eliminated", async (
 
 test("Client.decide: no logprobs at all raises DecisionError", async () => {
   const backend = new FakeBackend(() => noLogprobsReply());
-  const client = new Client("test-model", { backend });
+  const client = new Client("test-model", { backend, cache: false });
   await assert.rejects(() => client.decide(flatRow()), DecisionError);
 });
 
@@ -230,7 +230,7 @@ test("Client.decide: unmatched tokens go to unscored, not a thrown error, if oth
     // only "alpha" and "beta" ever show up as tokens; "gamma" never matches
     singleTokenReply("alpha", -0.1, [["beta", -0.5]]),
   );
-  const client = new Client("test-model", { backend });
+  const client = new Client("test-model", { backend, cache: false });
   const decision = await client.decide(row);
   assert.equal(decision.choice, "alpha");
   assert.ok(decision.unscored.includes("gamma"));

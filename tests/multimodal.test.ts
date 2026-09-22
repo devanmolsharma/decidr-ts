@@ -74,7 +74,7 @@ test("Client.decide: works end-to-end with a multimodal row via a fake backend",
     }
     return singleTokenReply("cat", -0.1, [["dog", -2.0]]);
   });
-  const client = new Client("test-model", { backend });
+  const client = new Client("test-model", { backend, cache: false });
   const decision = await client.decide(
     imageRow([{ type: "image", url: "https://example.com/cat.png" }]),
   );
