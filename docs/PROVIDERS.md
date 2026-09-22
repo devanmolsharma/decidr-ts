@@ -58,6 +58,12 @@ const client = new Client("some-model", {
 
 `OpenAIBackend(baseUrl, apiKey)` works against anything that implements `POST {baseUrl}/chat/completions` in the OpenAI shape and supports `logprobs`/`top_logprobs` — many self-hosted inference servers (vLLM, and others with an OpenAI-compatible front end) and some hosted third-party APIs qualify. Whether logprobs specifically are supported and forwarded correctly is up to that server; if `decide()` fails with a "no logprobs" error against a server you expected to support it, check that server's own OpenAI-compatibility docs for `logprobs` first.
 
+## Anthropic (Claude) is not currently reachable
+
+Checked directly, not assumed: Claude's native Messages API (`/v1/messages`) has no `logprobs` field at all, and Anthropic's own OpenAI-compatible endpoint explicitly documents `logprobs` as an unsupported parameter that gets silently ignored rather than an error. Neither route gives `decidr` anything to score a decision from, so there is no working `AnthropicBackend` to add here — one would compile, run, and then always fail with "no logprobs," which is worse than not having it at all, since it would invite spending an API call on something that can never produce a `Decision`.
+
+If Anthropic adds logprobs support to the Messages API in the future, `OpenAIBackend` (pointed at a compatible endpoint) or a small dedicated backend would become viable then; until it does, Claude models aren't a fit for this mechanism regardless of client library.
+
 ## What's verified, and what isn't
 
 `OllamaBackend`'s request construction and response handling are covered by live tests against a real running model, and by unit tests against a scripted fake backend.
