@@ -15,7 +15,56 @@
  * purely in terms of that shape and never knows which backend produced it.
  */
 
-import type { ChatMessage, ChatResult } from "./types.js";
+import type { ChatMessage, ContentBlock, ChatResult } from "./types.js";
+
+/** Ollama's `/api/chat` puts text in `content` and takes images separately,
+ * as a per-message `images: string[]` of raw base64 (no `data:` prefix, no
+ * URLs). It has no video/audio input at all -- those raise. Returns the
+ * flattened text content and the collected image list for one message. */
+function toOllamaMessage(content: ChatMessage["content"]): { content: string; images?: string[] } {
+  if (typeof content === "string") return { content };
+  const textParts: string[] = [];
+  const images: string[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      textParts.push(block.text);
+    } else if (block.type === "image") {
+      images.push(toRawBase64(block));
+    } else {
+      throw new DecisionError(`OllamaBackend cannot send a "${block.type}" content block -- Ollama's chat API has no ${block.type} input`);
+    }
+  }
+  return images.length > 0 ? { content: textParts.join(""), images } : { content: textParts.join("") };
+}
+
+function toRawBase64(block: Extract<ContentBlock, { type: "image" | "video" | "audio" }>): string {
+  if (block.data) return block.data;
+  throw new DecisionError(
+    `OllamaBackend needs inline "data" (base64) for a "${block.type}" block, not a "url" -- Ollama has no way to fetch a remote URL itself`,
+  );
+}
+
+/** OpenAI's `/v1/chat/completions` takes an array of typed parts for
+ * multimodal content: `{type: "text", text}` and
+ * `{type: "image_url", image_url: {url}}}`, where `url` may be a normal
+ * http(s) link or a `data:` URI. No video/audio input on this endpoint --
+ * those raise. */
+function toOpenAIContent(content: ChatMessage["content"]): string | Array<Record<string, unknown>> {
+  if (typeof content === "string") return content;
+  return content.map((block) => {
+    if (block.type === "text") return { type: "text", text: block.text };
+    if (block.type === "image") return { type: "image_url", image_url: { url: toDataOrUrl(block) } };
+    throw new DecisionError(
+      `OpenAIBackend cannot send a "${block.type}" content block -- the chat completions endpoint has no ${block.type} input`,
+    );
+  });
+}
+
+function toDataOrUrl(block: Extract<ContentBlock, { type: "image" | "video" | "audio" }>): string {
+  if (block.url) return block.url;
+  if (block.data) return `data:${block.mimeType ?? "image/png"};base64,${block.data}`;
+  throw new DecisionError(`a "${block.type}" content block needs "url" or "data"`);
+}
 
 /** Bad row, or a backend that could not answer it. */
 export class DecisionError extends Error {
@@ -57,9 +106,10 @@ export class OllamaBackend extends Backend {
   }
 
   async chat(model: string, messages: ChatMessage[]): Promise<ChatResult> {
+    const ollamaMessages = messages.map((m) => ({ role: m.role, ...toOllamaMessage(m.content) }));
     const body = {
       model,
-      messages,
+      messages: ollamaMessages,
       stream: false,
       // A reasoning preamble would put thinking tokens in the answer slot,
       // so the very next token stops being the decision.
@@ -130,9 +180,10 @@ export class OpenAIBackend extends Backend {
   }
 
   async chat(model: string, messages: ChatMessage[]): Promise<ChatResult> {
+    const openaiMessages = messages.map((m) => ({ role: m.role, content: toOpenAIContent(m.content) }));
     const body = {
       model,
-      messages,
+      messages: openaiMessages,
       max_tokens: 1,
       temperature: 0,
       logprobs: true,

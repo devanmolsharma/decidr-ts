@@ -13,7 +13,11 @@
  * level by level over the id hierarchy built by `buildTree` below.
  */
 
-import type { ChatMessage, Row } from "./types.js";
+import type { ChatMessage, ContentBlock, Row } from "./types.js";
+
+function isContentBlockArray(state: Row["state"]): state is ContentBlock[] {
+  return Array.isArray(state) && state.every((item) => typeof item === "object" && item !== null && "type" in item);
+}
 
 // Steps allowed per still-unresolved group before giving up on it.
 export const MAX_DEPTH = 6;
@@ -40,11 +44,21 @@ export class Candidate {
 
 export function buildPrefixMessages(row: Pick<Row, "state" | "question" | "options">, prefix = ""): ChatMessage[] {
   const optionsLine = row.options.map((o) => o.id).join(", ");
-  const state = typeof row.state === "string" ? row.state : JSON.stringify(row.state);
-  const user = `${state}\n\n${row.question}\nAnswer with exactly one of: ${optionsLine}.`;
+  const instructions = `${row.question}\nAnswer with exactly one of: ${optionsLine}.`;
+
+  let userContent: string | ContentBlock[];
+  if (isContentBlockArray(row.state)) {
+    // Instructions go in their own trailing text block rather than being
+    // spliced into an existing one, so image/video/audio blocks stay intact.
+    userContent = [...row.state, { type: "text", text: `\n${instructions}` }];
+  } else {
+    const state = typeof row.state === "string" ? row.state : JSON.stringify(row.state);
+    userContent = `${state}\n\n${instructions}`;
+  }
+
   const messages: ChatMessage[] = [
     { role: "system", content: PREFIX_SYSTEM },
-    { role: "user", content: user },
+    { role: "user", content: userContent },
   ];
   if (prefix) {
     messages.push({ role: "assistant", content: prefix });

@@ -12,8 +12,10 @@ export { confidence, isReliable } from "./types.js";
 export type {
   ChatMessage,
   ChatResult,
+  ContentBlock,
   Decision,
   LogprobEntry,
   Row,
   RowOption,
+  State,
 } from "./types.js";

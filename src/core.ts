@@ -23,7 +23,7 @@ import {
   MAX_DEPTH,
   TreeNode,
 } from "./prefix.js";
-import type { Decision, LogprobEntry, Row } from "./types.js";
+import type { ContentBlock, Decision, LogprobEntry, Row } from "./types.js";
 
 export { DecisionError } from "./backend.js";
 
@@ -56,6 +56,25 @@ export function validateRow(row: Row, checkIdFormat = true): void {
     JSON.stringify(row.state);
   } catch {
     throw new DecisionError("row.state must be JSON-serializable");
+  }
+  if (Array.isArray(row.state) && row.state.every((b) => typeof b === "object" && b !== null && "type" in b)) {
+    for (const block of row.state as ContentBlock[]) {
+      if (block.type === "text") {
+        if (typeof block.text !== "string") {
+          throw new DecisionError('a "text" content block needs a string "text" field');
+        }
+        continue;
+      }
+      if (block.type === "image" || block.type === "video" || block.type === "audio") {
+        const hasUrl = typeof block.url === "string" && block.url.length > 0;
+        const hasData = typeof block.data === "string" && block.data.length > 0;
+        if (hasUrl === hasData) {
+          throw new DecisionError(`a "${block.type}" content block needs exactly one of "url" or "data"`);
+        }
+        continue;
+      }
+      throw new DecisionError(`unknown content block type "${(block as { type: string }).type}"`);
+    }
   }
   if (!Array.isArray(row.options) || row.options.length < 2) {
     throw new DecisionError("row.options must be a list with at least 2 entries");

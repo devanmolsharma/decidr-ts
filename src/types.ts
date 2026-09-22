@@ -5,10 +5,27 @@ export interface RowOption {
   description: string;
 }
 
-/** One decision to make. `state` may be a string, or JSON-serializable data. */
+/** A piece of a multimodal `state`. `image`/`video`/`audio` carry either a
+ * `url` (a normal http(s) link, or a `data:` URI you've already encoded) or
+ * inline `data` (base64, no `data:` prefix) plus a `mimeType` -- exactly one
+ * of `url`/`data` should be set. Video and audio support depend entirely on
+ * the model/provider; a backend that can't forward a block type raises
+ * rather than silently dropping it, since decidr never guesses at a
+ * decision with input the model didn't actually see. */
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; url?: string; data?: string; mimeType?: string }
+  | { type: "video"; url?: string; data?: string; mimeType?: string }
+  | { type: "audio"; url?: string; data?: string; mimeType?: string };
+
+/** One decision to make. `state` is what the model reads: a plain string,
+ * JSON-serializable data, or (for a multimodal decision) an array of
+ * `ContentBlock`s mixing text with images/video/audio. */
+export type State = string | Record<string, unknown> | unknown[] | ContentBlock[];
+
 export interface Row {
   id: string;
-  state: string | Record<string, unknown> | unknown[];
+  state: State;
   question: string;
   options: RowOption[];
 }
@@ -65,4 +82,8 @@ export interface ChatResult {
   logprobs: LogprobEntry[];
 }
 
-export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+/** `content` is a plain string for every text-only message (system prompts,
+ * the assistant-prefix continuation), or `ContentBlock[]` for a user message
+ * carrying multimodal `state`. A backend that doesn't support a block type
+ * in `content` must raise, not silently strip it. */
+export type ChatMessage = { role: "system" | "user" | "assistant"; content: string | ContentBlock[] };
