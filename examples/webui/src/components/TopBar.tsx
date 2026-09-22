@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useApiKey, currentProvider } from "@/hooks/useApiKey";
 import { PROVIDERS } from "@/lib/providers";
@@ -6,6 +7,8 @@ import { cn } from "@/lib/utils";
 
 const inputClass =
   "bg-secondary border border-border rounded-md px-2.5 h-8 text-[13px] font-mono text-foreground outline-none focus:border-ring transition-colors";
+
+const CUSTOM_MODEL_VALUE = "__custom__";
 
 /** A single, thin app-shell header replacing what used to be a permanent
  * left sidebar: provider/model/key on the left, the example picker on
@@ -17,11 +20,29 @@ export function TopBar({ activePresetId, onLoadPreset }: { activePresetId: strin
     useApiKey();
   const provider = currentProvider(providerId);
 
+  // "Custom model" is a per-provider escape hatch, not a separate
+  // provider -- every listed provider only ships a handful of ids known
+  // to return real logprobs (see providers.ts), but a provider may add
+  // more models over time, or a visitor may know one that works that
+  // isn't listed yet.
+  const [usingCustomModel, setUsingCustomModel] = useState(false);
+
   function selectProvider(id: string) {
     setProviderId(id);
+    setUsingCustomModel(false);
     const next = PROVIDERS.find((p) => p.id === id);
     if (next && next.models.length > 0 && !next.models.some((m) => m.id === model)) {
       setModel(next.models[0].id);
+    }
+  }
+
+  function selectModel(value: string) {
+    if (value === CUSTOM_MODEL_VALUE) {
+      setUsingCustomModel(true);
+      setModel("");
+    } else {
+      setUsingCustomModel(false);
+      setModel(value);
     }
   }
 
@@ -43,8 +64,8 @@ export function TopBar({ activePresetId, onLoadPreset }: { activePresetId: strin
         </SelectContent>
       </Select>
 
-      {provider.models.length > 0 ? (
-        <Select value={model} onValueChange={setModel}>
+      {provider.models.length > 0 && !usingCustomModel && (
+        <Select value={model} onValueChange={selectModel}>
           <SelectTrigger className="w-auto min-w-40 h-8 text-[13px] font-mono shrink-0">
             <SelectValue />
           </SelectTrigger>
@@ -54,9 +75,14 @@ export function TopBar({ activePresetId, onLoadPreset }: { activePresetId: strin
                 {m.label}
               </SelectItem>
             ))}
+            <SelectItem value={CUSTOM_MODEL_VALUE} className="text-[13px] font-mono text-muted-foreground">
+              Custom model…
+            </SelectItem>
           </SelectContent>
         </Select>
-      ) : (
+      )}
+
+      {(provider.models.length === 0 || usingCustomModel) && (
         <input
           value={model}
           onChange={(e) => setModel(e.target.value)}
@@ -64,6 +90,19 @@ export function TopBar({ activePresetId, onLoadPreset }: { activePresetId: strin
           className={cn(inputClass, "w-40 shrink-0")}
           spellCheck={false}
         />
+      )}
+
+      {usingCustomModel && provider.models.length > 0 && (
+        <button
+          onClick={() => {
+            setUsingCustomModel(false);
+            setModel(provider.models[0].id);
+          }}
+          className="text-[11px] text-muted-foreground hover:text-foreground shrink-0"
+          title="Back to the model list"
+        >
+          &times;
+        </button>
       )}
 
       {provider.id === "custom" && (

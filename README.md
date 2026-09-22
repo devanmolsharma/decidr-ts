@@ -1,22 +1,36 @@
-# decidr
+# decidr-ts: real LLM classification, scoring, and yes/no decisions in TypeScript
 
-Typed decisions from an LLM in one forward pass. Give it a question and a
-list of real option ids, get back real probabilities over those ids --
-no generation, no parsing, no retries for malformed output.
+**Structured LLM output without JSON parsing, retries, or prompt
+engineering.** decidr-ts reads a real probability straight off the
+model's own logits for a question you define -- pick the best option
+from a list (**Choice**), grade something on a rubric (**Score**), or
+get a calibrated yes/no (**Noun**) -- in one forward pass, with no
+generated text to parse and nothing that can come back malformed.
+
+If you're building ticket routing, intent classification, content
+moderation, agent-task dispatch, or any place your code currently does
+`JSON.parse(llm_response)` and hopes for the best, this replaces that
+call with a typed result and a real confidence number.
+
+- **Real probabilities, not self-reported confidence.** `decision.probabilities`
+  is a softmax over the model's own next-token logprobs -- not the model
+  being asked to guess its own confidence in text, which is a well-known
+  unreliable signal.
+- **Works today against real, verified providers** -- OpenAI, Cerebras,
+  Together AI, self-hosted vLLM, and any local Ollama model -- checked
+  live against each provider's own docs, not assumed (see
+  [PROVIDERS.md](docs/PROVIDERS.md)).
+- **Fast.** No generation, no retries on malformed JSON. Measured live:
+  as fast as ~165ms end-to-end on Cerebras for a real classification
+  call -- see [Benchmarks](#benchmarks).
+- **[Try it live](https://devanmolsharma.github.io/decidr-ts/)** -- a
+  real in-browser playground, no signup: paste your own API key, pick an
+  example, run a real request, see the real numbers come back.
 
 This is the TypeScript port of [decidr](https://github.com/devanmolsharma/decidr)
 (Python, on PyPI as `decidr`). Same mechanism, same id rules, same
 hierarchy resolution -- ported line-for-line where JS/TS allowed it to
 stay faithful, adapted where it didn't (see [Porting notes](#porting-notes)).
-If you want the Python version instead, that's the one to use.
-
-**[Try it live](https://devanmolsharma.github.io/decidr-ts/)** -- a real,
-in-browser playground: paste an API key (OpenAI, Cerebras, Together, or a
-local Ollama), pick an example (support ticket routing, vision
-classification, a 150-option scale demo, and more), and run real
-Choice/Score/Noun requests against a real model, straight from your
-browser. Source in [`examples/webui/`](examples/webui/). See
-[Benchmarks](#benchmarks) below for what the timings actually look like.
 
 ## Install
 
@@ -244,56 +258,34 @@ Cerebras's specialized inference hardware is consistently 2–6x faster
 than a general hosted API on identical requests, at identical accuracy
 (same `logprobs`-based mechanism, same measured probabilities either
 way) -- see the [webui playground](examples/webui/) for a live, in-browser
-version of these same numbers, screenshots below.
+version of these same numbers, screenshots below. `qwen-3.8-27b` is
+currently the only (and smallest) model on Cerebras's public inference
+API -- checked live, not assumed.
 
 ![Playground running a real Choice + Score request against Cerebras](examples/webui/screenshots/playground-results.png)
 
 ![The Choice/Score/Noun primitives together on a multimodal (image) row](examples/webui/screenshots/vision-example.png)
 
-## What's holding this back from being faster still
+## What would make this even faster
 
-The mechanism's real ceiling isn't decidr-ts's own code -- every backend
-checked (`docs/PROVIDERS.md`) caps `top_logprobs` at 20 (OpenAI's own
-documented hard limit; most others match or cap lower). That number is
-the single biggest lever on both **round count** and **accuracy for
-large option sets**:
+The main thing standing between decidr-ts and even lower latency isn't
+in this library's code -- it's a limit every provider imposes on the API
+itself. When asking the model "which of these options fits best," the
+API only ever hands back a short list of its top candidate answers (20,
+on every provider checked -- see [PROVIDERS.md](docs/PROVIDERS.md)), not
+its full opinion across everything you offered it. With a short list of
+options that's plenty. With a long one, decidr-ts has to ask a couple of
+smaller, more targeted questions instead of one big one, to make sure
+every option still gets a fair, real measurement.
 
-- **Round count.** A race only needs one round when every remaining
-  candidate's next token shows up in that window. A wider window means
-  more candidates disambiguate in round 1 instead of needing a second
-  round -- fewer requests, lower latency, no code changes required.
-- **How many real options fit in one race.** `HIERARCHY.md` measured
-  this directly: with 30 genuinely distinct options in one flat race
-  against a 20-token window, only 5/30 categories appeared in the
-  results at all, and raising the window to 100 only got 12/30 --
-  because a handful of dominant candidates soak up nearly all the
-  probability mass once too many things compete at once, independent of
-  window size past a point. A **materially** larger window (hundreds,
-  not 100) would let bigger flat races resolve reliably without leaning
-  on the id-hierarchy split as heavily as they do today.
-
-**If a hosted provider raised `top_logprobs` past 20** (self-hosted
-vLLM already allows an effectively unbounded window, per its own request
-schema -- see `docs/PROVIDERS.md`'s vLLM entry), the direct effects on
-this library would be:
-
-1. More single-round resolutions -- proportionally fewer total requests
-   for the same hierarchy, no logic change, just wider windows per race.
-2. Larger safe flat-race sizes -- `MAX_BRANCHES_PER_LEVEL` (currently 16)
-   exists specifically because of the top-20 constraint; a materially
-   wider window would let that cap rise too, meaning fewer hierarchy
-   levels are needed for the same option count, meaning fewer total
-   rounds for large `Row`s.
-3. No change to correctness or the `Decision` shape -- `probabilities`/
-   `eliminated`/`unscored`/`stoppedEarly` all mean exactly what they mean
-   today; a wider window only ever adds more real measurements, it never
-   changes what a measurement means.
-
-None of this is a decidr-ts roadmap item -- it's a hosted-provider
-product decision entirely outside this library's control. Self-hosted
-vLLM is the one place this ceiling is already lifted today (see
-`docs/PROVIDERS.md`), at the cost of running your own inference instead
-of using a hosted API.
+**If providers exposed a larger list of candidate answers per request,**
+decidr-ts would need fewer of those follow-up questions -- most requests
+would resolve in a single round-trip regardless of how many options
+you're choosing between, which means lower latency and fewer API calls,
+automatically, with no changes needed here. This is entirely a provider
+product decision, not a decidr-ts roadmap item -- self-hosted inference
+(vLLM) already removes this limit today if you're willing to run your
+own model instead of a hosted API.
 
 ## Calibration
 

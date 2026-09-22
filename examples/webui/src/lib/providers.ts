@@ -13,12 +13,15 @@
  * within a month of this list being written). Only standard chat models
  * confirmed to still be active and NOT reasoning-only are listed --
  * Cerebras's gpt-oss-120b is deliberately excluded even though it's on
- * their current model list: it's a reasoning model with undocumented
- * logprobs behavior, exactly the failure mode docs/PROVIDERS.md warns
- * about ("reasoning models... typically reject or ignore logprobs").
- * qwen-3.8-27b is used instead -- not reasoning-only, and Cerebras's own
- * API reference documents logprobs/top_logprobs (0-20) generically for
- * the endpoint, checked live. */
+ * their current model list and advertised at a higher tokens/sec than
+ * qwen-3.8-27b: confirmed live (not assumed) that it returns NO logprobs
+ * field at all even when logprobs:true/top_logprobs:5 are requested
+ * (finish_reason "length" after the one requested token, empty content),
+ * and separately hard-rejects this backend's default reasoning_effort:
+ * "none" with an explicit 400 rather than the silent-ignore fallback
+ * path handles. qwen-3.8-27b is used instead -- confirmed live to return
+ * real, correct logprobs. See docs/PROVIDERS.md's Cerebras entry for the
+ * full verification. */
 export interface ModelOption {
   id: string;
   label: string;
