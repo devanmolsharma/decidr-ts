@@ -58,6 +58,42 @@ const client = new Client("some-model", {
 
 `OpenAIBackend(baseUrl, apiKey)` works against anything that implements `POST {baseUrl}/chat/completions` in the OpenAI shape and supports `logprobs`/`top_logprobs` — many self-hosted inference servers (vLLM, and others with an OpenAI-compatible front end) and some hosted third-party APIs qualify. Whether logprobs specifically are supported and forwarded correctly is up to that server; if `decide()` fails with a "no logprobs" error against a server you expected to support it, check that server's own OpenAI-compatibility docs for `logprobs` first.
 
+### How to tell if a provider will work, before wiring it up
+
+There's no universal registry of who supports `logprobs` — it changes as providers ship features, so treat the table below as a starting point to verify, not a guarantee. Two ways to check a specific provider without writing any `decidr` code first:
+
+1. **Read that provider's own API reference** for its chat completions endpoint and search it for `logprobs` / `top_logprobs`. If the parameter isn't documented at all, or is documented as accepted-but-ignored (as Anthropic's OpenAI-compat layer does), the provider won't work here regardless of what `decidr` does.
+2. **Send one raw request yourself** before involving `decidr`, and check whether a `logprobs` object actually comes back on the choice:
+
+   ```bash
+   curl https://your-provider.example.com/v1/chat/completions \
+     -H "Authorization: Bearer $API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "model": "your-model",
+       "messages": [{"role": "user", "content": "Say hi."}],
+       "max_tokens": 1,
+       "logprobs": true,
+       "top_logprobs": 5
+     }'
+   ```
+
+   If `choices[0].logprobs.content` is present and non-empty, the provider supports it. If it's missing, `null`, or the request errors on the `logprobs`/`top_logprobs` fields, it doesn't — `OpenAIBackend` will fail the same way `decide()` would, just without spending a hierarchy's worth of requests finding out.
+
+### Providers known to support `logprobs` via an OpenAI-compatible endpoint
+
+Checked against each provider's own documentation, not assumed — but providers change this without notice, so verify with the request above before depending on it in production:
+
+| Provider | Notes |
+|---|---|
+| OpenAI | Standard chat models only (`gpt-4o` family, `gpt-4.1`); reasoning models (o-series) reject `logprobs`. |
+| Together AI | Documented support for `logprobs`/`top_logprobs`; note `logprobs` and streaming (`stream: true`) are mutually exclusive on their API — `decidr` doesn't stream, so this doesn't affect it. |
+| Groq | OpenAI-compatible endpoint; verify current `top_logprobs` cap before relying on a specific value. |
+| Fireworks AI | OpenAI-compatible endpoint; reported `top_logprobs` cap is lower than OpenAI's (around 5) — this project's backends always request 20, so expect the response to come back capped rather than erroring, which is fine for `decidr`'s mechanism (it just means fewer alternatives to match against per step). |
+| Self-hosted vLLM | Implements the OpenAI-compatible server spec including `logprobs`/`top_logprobs` directly; this is the same shape Together, Fireworks, and several other hosted providers build on. |
+
+**Not currently usable**, regardless of routing: Anthropic/Claude (see [above](#anthropic-claude-is-not-currently-reachable)) and any reasoning-focused model on any provider (the API contract is built around a hidden reasoning step instead of a plain next-token distribution, and `logprobs` is typically rejected or ignored as a result).
+
 ## Anthropic (Claude) is not currently reachable
 
 Checked directly, not assumed: Claude's native Messages API (`/v1/messages`) has no `logprobs` field at all, and Anthropic's own OpenAI-compatible endpoint explicitly documents `logprobs` as an unsupported parameter that gets silently ignored rather than an error. Neither route gives `decidr` anything to score a decision from, so there is no working `AnthropicBackend` to add here — one would compile, run, and then always fail with "no logprobs," which is worse than not having it at all, since it would invite spending an API call on something that can never produce a `Decision`.
