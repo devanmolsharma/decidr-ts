@@ -5,6 +5,7 @@ export {
   ID_FORMAT,
   MAX_BRANCHES_PER_LEVEL,
   MAX_ID_LENGTH,
+  MIN_ID_LENGTH,
   softmax,
   validateRow,
 } from "./core.js";
@@ -23,5 +24,9 @@ export type {
   LogprobEntry,
   Row,
   RowOption,
+  ScoreLevel,
+  ScoreResult,
+  ScoreRow,
   State,
+  TruthResult,
 } from "./types.js";

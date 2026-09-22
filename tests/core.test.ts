@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Client, MAX_ID_LENGTH, softmax, validateRow } from "../src/core.js";
+import { Client, MAX_ID_LENGTH, MIN_ID_LENGTH, softmax, validateRow } from "../src/core.js";
 import { DecisionError } from "../src/backend.js";
 import { FakeBackend, multiTokenReply, noLogprobsReply, singleTokenReply } from "./fake-backend.js";
 import type { Row } from "../src/types.js";
@@ -17,20 +17,20 @@ test("softmax: empty input returns empty", () => {
 
 test("validateRow: accepts a well-formed row", () => {
   assert.doesNotThrow(() =>
-    validateRow({ id: "r1", state: "hello", question: "which?", options: [{ id: "a", description: "d" }, { id: "b", description: "d" }] }),
+    validateRow({ id: "r1", state: "hello", question: "which?", options: [{ id: "aa", description: "d" }, { id: "bb", description: "d" }] }),
   );
 });
 
 test("validateRow: rejects fewer than 2 options", () => {
   assert.throws(
-    () => validateRow({ id: "r1", state: "s", question: "q", options: [{ id: "a", description: "d" }] }),
+    () => validateRow({ id: "r1", state: "s", question: "q", options: [{ id: "aa", description: "d" }] }),
     DecisionError,
   );
 });
 
 test("validateRow: rejects duplicate option ids", () => {
   assert.throws(
-    () => validateRow({ id: "r1", state: "s", question: "q", options: [{ id: "a", description: "d" }, { id: "a", description: "d2" }] }),
+    () => validateRow({ id: "r1", state: "s", question: "q", options: [{ id: "aa", description: "d" }, { id: "aa", description: "d2" }] }),
     DecisionError,
   );
 });
@@ -38,14 +38,29 @@ test("validateRow: rejects duplicate option ids", () => {
 test("validateRow: rejects ids over MAX_ID_LENGTH", () => {
   const longId = "a".repeat(MAX_ID_LENGTH + 1);
   assert.throws(
-    () => validateRow({ id: "r1", state: "s", question: "q", options: [{ id: longId, description: "d" }, { id: "b", description: "d" }] }),
+    () => validateRow({ id: "r1", state: "s", question: "q", options: [{ id: longId, description: "d" }, { id: "bb", description: "d" }] }),
     DecisionError,
+  );
+});
+
+test("validateRow: rejects ids under MIN_ID_LENGTH", () => {
+  const shortId = "a".repeat(MIN_ID_LENGTH - 1);
+  assert.throws(
+    () => validateRow({ id: "r1", state: "s", question: "q", options: [{ id: shortId, description: "d" }, { id: "bb", description: "d" }] }),
+    DecisionError,
+  );
+});
+
+test("validateRow: accepts ids at exactly MIN_ID_LENGTH", () => {
+  const shortId = "a".repeat(MIN_ID_LENGTH);
+  assert.doesNotThrow(() =>
+    validateRow({ id: "r1", state: "s", question: "q", options: [{ id: shortId, description: "d" }, { id: "bb", description: "d" }] }),
   );
 });
 
 test("validateRow: rejects ids with invalid characters", () => {
   assert.throws(
-    () => validateRow({ id: "r1", state: "s", question: "q", options: [{ id: "Bad-ID", description: "d" }, { id: "b", description: "d" }] }),
+    () => validateRow({ id: "r1", state: "s", question: "q", options: [{ id: "Bad-ID", description: "d" }, { id: "bb", description: "d" }] }),
     DecisionError,
   );
 });
@@ -201,4 +216,61 @@ test("Client.decide: 2 options each with exactly one segment resolve via one fla
   const client = new Client("test-model", { backend, cache: false });
   const decision = await client.decide({ id: "r1", state: "s", question: "q", options: [{ id: "cat", description: "d" }, { id: "dog", description: "d" }] });
   assert.equal(decision.choice, "cat");
+});
+
+test("Client.score: weighted position lands on the confident level's index", async () => {
+  const backend = new FakeBackend(() => singleTokenReply("crit", -0.01, [["mod", -6.0], ["cosm", -8.0]]));
+  const client = new Client("test-model", { backend, cache: false });
+  const result = await client.score({
+    id: "s1",
+    state: "the bug crashes the whole app for every user",
+    question: "how severe is this bug?",
+    levels: [
+      { id: "cosm", description: "cosmetic" },
+      { id: "mod", description: "moderate" },
+      { id: "crit", description: "critical" },
+    ],
+  });
+  assert.ok(result.score > 1.9 && result.score <= 2, `expected score near 2, got ${result.score}`);
+  assert.equal(result.decision.choice, "crit");
+});
+
+test("Client.score: an even split between two adjacent levels lands between their indices", async () => {
+  const backend = new FakeBackend(() => singleTokenReply("mod", -0.7, [["crit", -0.7], ["cosm", -8.0]]));
+  const client = new Client("test-model", { backend, cache: false });
+  const result = await client.score({
+    id: "s1",
+    state: "s",
+    question: "how severe?",
+    levels: [
+      { id: "cosm", description: "cosmetic" },
+      { id: "mod", description: "moderate" },
+      { id: "crit", description: "critical" },
+    ],
+  });
+  assert.ok(result.score > 1.2 && result.score < 1.8, `expected score between 1 and 2, got ${result.score}`);
+});
+
+test("Client.score: rejects fewer than 2 levels", async () => {
+  const backend = new FakeBackend(() => singleTokenReply("cosm", -0.1));
+  const client = new Client("test-model", { backend, cache: false });
+  await assert.rejects(
+    () => client.score({ id: "s1", state: "s", question: "q", levels: [{ id: "cosm", description: "only one" }] }),
+    DecisionError,
+  );
+});
+
+test("Client.truth: a confident true reads back near 1", async () => {
+  const backend = new FakeBackend(() => singleTokenReply("true", -0.01, [["false", -8.0]]));
+  const client = new Client("test-model", { backend, cache: false });
+  const result = await client.truth({ id: "t1", state: "a hotdog contains bread and a filling", question: "is a hotdog a sandwich?" });
+  assert.ok(result.truth > 0.99, `expected truth near 1, got ${result.truth}`);
+  assert.equal(result.decision.choice, "true");
+});
+
+test("Client.truth: a confident false reads back near 0", async () => {
+  const backend = new FakeBackend(() => singleTokenReply("false", -0.01, [["true", -8.0]]));
+  const client = new Client("test-model", { backend, cache: false });
+  const result = await client.truth({ id: "t1", state: "s", question: "is the sky green?" });
+  assert.ok(result.truth < 0.01, `expected truth near 0, got ${result.truth}`);
 });

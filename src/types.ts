@@ -81,6 +81,56 @@ export function isReliable(decision: Decision): boolean {
   return decision.unscored.length === 0;
 }
 
+/** One point on a `score()` spectrum, ordered low to high. `id` MUST
+ * satisfy the same id-format rules as a `RowOption` (SPEC.md §5) since a
+ * level becomes a `Client.decide` option internally -- levels are
+ * conventionally named by their zero-based position ("0", "1", "2", ...)
+ * so the returned weighted `score` lines up with `levels`' array index,
+ * but any valid id works since `levels` is order-preserving and the
+ * weighting uses that order, not the id's own text. */
+export interface ScoreLevel {
+  id: string;
+  description: string;
+}
+
+/** Input to `Client.score`: same shape as evaluating a `Row`, but
+ * `levels` replaces `options` -- an ordered rubric from low to high
+ * rather than an unordered set of choices. */
+export interface ScoreRow {
+  id: string;
+  state: State;
+  question: string;
+  levels: ScoreLevel[];
+}
+
+/** The result of `Client.score`. Built entirely from a `Decision` over
+ * `levels` treated as ordinary options (see core.ts) -- `score` is the
+ * probability-weighted position (`Σ levelIndex * probability`), which can
+ * land between two levels when the model's distribution is spread across
+ * more than one, same idea as a weighted average. */
+export interface ScoreResult {
+  id: string;
+  /** Probability-weighted position on `[0, levels.length - 1]`. */
+  score: number;
+  /** The underlying per-level `Decision` -- `probabilities`,
+   * `unscored`/`eliminated`/`stoppedEarly` all still apply, keyed by each
+   * level's own id, exactly as `decide()` would report them for any other
+   * row. Use this for `confidence`/`isReliable` on the score itself. */
+  decision: Decision;
+}
+
+/** The result of `Client.truth`: a single value in `[0, 1]`, read the
+ * same way a `confidence` value is read elsewhere in this library -- the
+ * probability itself is the signal, not just whichever side of 0.5 it
+ * falls on. */
+export interface TruthResult {
+  id: string;
+  /** Probability the statement is true -- `decision.probabilities.get("true")`. */
+  truth: number;
+  /** The underlying two-option ("true" vs "false") `Decision`. */
+  decision: Decision;
+}
+
 /** One generated token position's logprob info, in the shape every
  * `Backend` normalizes its provider's response into. `topLogprobs` is a
  * rank window the provider chose to report, never a requested set. */

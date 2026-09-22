@@ -37,6 +37,22 @@ DecisionError: option id "a_really_long_descriptive_slug_like_this_one" exceeds 
 
 40 characters is generous relative to real option ids: every id in this project's own tests and examples is 14 characters or fewer (`access_denied`, `billing_refund`). It's meant to catch ids that were clearly never meant to be an *id* — a sentence, a description, a path — not to be a tight budget real category names bump against.
 
+`decidr` also rejects any option id shorter than 2 characters:
+
+```
+DecisionError: option id "a" is shorter than 2 characters -- a single character is too likely to collide with another option's first token or a common filler token in the race
+```
+
+A single character is too likely to *be* a whole token, or to sit inside a much more common token than the option was meant to represent — either way it competes poorly for space in the top-20 `topLogprobs` window against unrelated common tokens, for reasons that have nothing to do with whether it's the right answer. Two characters is the cheap, static floor; it doesn't guarantee good token boundaries (nothing short of a live tokenizer probe could), but it rules out the worst case for free.
+
+## Choosing ids for a fast, single-pass decision
+
+If every option in a row genuinely stands on its own — no natural grouping, no shared category — give them ids with **no shared segments and no shared prefixes**, even short ones. `decidr` degrades to exactly one flat race (§6.1) when there's nothing to descend into, and one race is one round: `billing`, `access`, `outage` resolve as fast as the model can answer, no hierarchy overhead.
+
+The opposite mistake is accidentally creating a hierarchy you didn't intend, by giving otherwise-unrelated options a shared leading segment. `lv0`, `lv1`, `lv2` race directly against each other in one round; `level_0`, `level_1`, `level_2` don't — the shared `level` segment makes `buildTree` collapse them under one artificial parent first (a free, no-request descent, since it's the only child of the root), then race `0` vs `1` vs `2` as a *second* round underneath it. The extra round isn't wrong, but it's pure overhead for options that were never really nested to begin with — reserve a shared segment for options that are actually grouped by something real (`billing_refund`/`billing_dispute` both being billing issues), not as an incidental naming convention.
+
+If your natural categories genuinely are nested (department → sub-category, severity level → specific cause), keep the shared segment — that's exactly what the hierarchy is for, and the extra round buys you [HIERARCHY.md](HIERARCHY.md)'s real benefit: keeping each individual race small enough that every candidate has a fair shot at the `topLogprobs` window, which a single very large flat race cannot do (see that doc's measured 5/30-category result).
+
 ## Ids can't nest inside each other
 
 `billing` and `billing_refund` can't both be options in the same `decide()` call. It's genuinely ambiguous which one is meant: is `billing` a standalone answer distinct from `billing_refund`, or is it the umbrella every `billing_*` option (including `billing_refund`) belongs under? `decidr` doesn't guess:

@@ -10,6 +10,14 @@ hierarchy resolution -- ported line-for-line where JS/TS allowed it to
 stay faithful, adapted where it didn't (see [Porting notes](#porting-notes)).
 If you want the Python version instead, that's the one to use.
 
+**[Try it live](https://devanmolsharma.github.io/decidr-ts/)** -- a real,
+in-browser playground: paste an API key (OpenAI, Cerebras, Together, or a
+local Ollama), pick an example (support ticket routing, vision
+classification, a 150-option scale demo, and more), and run real
+Choice/Score/Noun requests against a real model, straight from your
+browser. Source in [`examples/webui/`](examples/webui/). See
+[Benchmarks](#benchmarks) below for what the timings actually look like.
+
 ## Install
 
 ```bash
@@ -67,6 +75,45 @@ pointed at a local Ollama instead.
 family and similar) do. Reasoning models (the o-series and similar
 reasoning models elsewhere) do not -- `decide()` will fail with a clear
 error if you point it at one.
+
+## Three primitives: Choice, Score, Noun
+
+`decide()` (above) is the **Choice** primitive: pick the best option from
+a fixed set of ids. Two more primitives are built on top of it, same
+mechanism, different response shape:
+
+```ts
+// Score: place the state on an ordered rubric, low to high.
+const severity = await client.score({
+  id: "bug-1",
+  state: "The bug crashes the whole app for every user, no workaround.",
+  question: "How severe is this bug?",
+  levels: [
+    { id: "cosm", description: "cosmetic" },
+    { id: "mod", description: "moderate" },
+    { id: "crit", description: "critical" },
+  ],
+});
+severity.score; // e.g. 1.95 -- a probability-weighted position on [0, 2],
+                // not just the top level's index
+severity.decision; // the underlying Decision, same probabilities/eliminated/etc
+
+// Noun: a single true/false probability -- the number itself is the signal.
+const critical = await client.truth({
+  id: "bug-1",
+  state: "The bug crashes the whole app for every user, no workaround.",
+  question: "Is this bug a critical severity issue?",
+});
+critical.truth; // e.g. 0.9862 -- read the same way confidence() is read
+                // elsewhere: the probability IS the answer, not just
+                // which side of 0.5 it lands on
+```
+
+Both are ordinary `decide()` calls under the hood (`score` races the
+levels as options and computes a weighted index; `truth` races a fixed
+`"true"`/`"false"` pair) -- same id-format rules, same `unscored`/
+`eliminated`/`stoppedEarly` semantics apply to the underlying `Decision`
+either way.
 
 ## How option ids work
 
@@ -176,6 +223,77 @@ promises: hosted OpenAI is bounded by its own server-side latency
 Ollama model has no such floor. `Client`'s `cache` option controls the
 underlying speculative cache (on by default, persisted to
 `~/.decidr-ts/token-cache.json`) -- pass `cache: false` to disable it.
+
+## Benchmarks
+
+Measured live, 3 runs each, `exhaustive: false` unless noted -- not
+cherry-picked, this is the actual spread including warm-up variance:
+
+| Row | Provider / model | Latency |
+|---|---|---:|
+| Flat, 4 options | Cerebras `qwen-3.8-27b` | 165–339ms |
+| Flat, 4 options | OpenAI `gpt-4o-mini` | 817–2164ms |
+| Hierarchical, 7 options (1 level) | Cerebras `qwen-3.8-27b` | 349–721ms |
+| Hierarchical, 7 options (1 level) | OpenAI `gpt-4o-mini` | 1177–1481ms |
+| Hierarchical, 7 options, `exhaustive: true` | Cerebras `qwen-3.8-27b` | 343–641ms |
+| Hierarchical, 7 options, `exhaustive: true` | OpenAI `gpt-4o-mini` | 1324–2325ms |
+| `Client.score`, 3 levels | Cerebras `qwen-3.8-27b` | 172–285ms |
+| `Client.truth` | Cerebras `qwen-3.8-27b` | 163–409ms |
+
+Cerebras's specialized inference hardware is consistently 2–6x faster
+than a general hosted API on identical requests, at identical accuracy
+(same `logprobs`-based mechanism, same measured probabilities either
+way) -- see the [webui playground](examples/webui/) for a live, in-browser
+version of these same numbers, screenshots below.
+
+![Playground running a real Choice + Score request against Cerebras](examples/webui/screenshots/playground-results.png)
+
+![The Choice/Score/Noun primitives together on a multimodal (image) row](examples/webui/screenshots/vision-example.png)
+
+## What's holding this back from being faster still
+
+The mechanism's real ceiling isn't decidr-ts's own code -- every backend
+checked (`docs/PROVIDERS.md`) caps `top_logprobs` at 20 (OpenAI's own
+documented hard limit; most others match or cap lower). That number is
+the single biggest lever on both **round count** and **accuracy for
+large option sets**:
+
+- **Round count.** A race only needs one round when every remaining
+  candidate's next token shows up in that window. A wider window means
+  more candidates disambiguate in round 1 instead of needing a second
+  round -- fewer requests, lower latency, no code changes required.
+- **How many real options fit in one race.** `HIERARCHY.md` measured
+  this directly: with 30 genuinely distinct options in one flat race
+  against a 20-token window, only 5/30 categories appeared in the
+  results at all, and raising the window to 100 only got 12/30 --
+  because a handful of dominant candidates soak up nearly all the
+  probability mass once too many things compete at once, independent of
+  window size past a point. A **materially** larger window (hundreds,
+  not 100) would let bigger flat races resolve reliably without leaning
+  on the id-hierarchy split as heavily as they do today.
+
+**If a hosted provider raised `top_logprobs` past 20** (self-hosted
+vLLM already allows an effectively unbounded window, per its own request
+schema -- see `docs/PROVIDERS.md`'s vLLM entry), the direct effects on
+this library would be:
+
+1. More single-round resolutions -- proportionally fewer total requests
+   for the same hierarchy, no logic change, just wider windows per race.
+2. Larger safe flat-race sizes -- `MAX_BRANCHES_PER_LEVEL` (currently 16)
+   exists specifically because of the top-20 constraint; a materially
+   wider window would let that cap rise too, meaning fewer hierarchy
+   levels are needed for the same option count, meaning fewer total
+   rounds for large `Row`s.
+3. No change to correctness or the `Decision` shape -- `probabilities`/
+   `eliminated`/`unscored`/`stoppedEarly` all mean exactly what they mean
+   today; a wider window only ever adds more real measurements, it never
+   changes what a measurement means.
+
+None of this is a decidr-ts roadmap item -- it's a hosted-provider
+product decision entirely outside this library's control. Self-hosted
+vLLM is the one place this ceiling is already lifted today (see
+`docs/PROVIDERS.md`), at the cost of running your own inference instead
+of using a hosted API.
 
 ## Calibration
 

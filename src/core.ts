@@ -13,13 +13,14 @@ import {
   TreeNode,
 } from "./prefix.js";
 import { TokenCache, type TokenCacheOptions } from "./speculative-cache.js";
-import type { ContentBlock, Decision, LogprobEntry, Row } from "./types.js";
+import type { ContentBlock, Decision, LogprobEntry, Row, ScoreResult, ScoreRow, TruthResult } from "./types.js";
 
 export { DecisionError } from "./backend.js";
 
 export const DEFAULT_HOST = "http://127.0.0.1:11434/v1";
 
 export const MAX_ID_LENGTH = 40;
+export const MIN_ID_LENGTH = 2;
 export const ID_FORMAT = /^[a-z0-9]+(_[a-z0-9]+)*$/;
 export const MAX_BRANCHES_PER_LEVEL = 16;
 
@@ -88,6 +89,11 @@ export function validateRow(row: Row, checkIdFormat = true): void {
     for (const option of row.options) {
       if (option.id.length > MAX_ID_LENGTH) {
         throw new DecisionError(`option id "${option.id}" exceeds ${MAX_ID_LENGTH} characters`);
+      }
+      if (option.id.length < MIN_ID_LENGTH) {
+        throw new DecisionError(
+          `option id "${option.id}" is shorter than ${MIN_ID_LENGTH} characters -- a single character is too likely to collide with another option's first token or a common filler token in the race; see docs/NAMING_IDS.md`,
+        );
       }
       if (!ID_FORMAT.test(option.id)) {
         throw new DecisionError(`option id "${option.id}" must be lowercase alphanumeric segments joined by underscores`);
@@ -173,6 +179,51 @@ export class Client {
     const out: Decision[] = [];
     for (const row of rows) out.push(await this.decide(row));
     return out;
+  }
+
+  /** Grade `state` against an ordered rubric (`levels`, low to high) --
+   * comparable to TypeSafe's `Score` primitive. Implemented entirely on
+   * top of `decide()`: each level becomes an ordinary option (ids MUST
+   * still pass `validateRow`'s id-format checks, same as any other
+   * option), and `score` is the probability-weighted level index
+   * (`Σ levelIndex * probability`), which can land between two integers
+   * when the model's distribution spans more than one level -- the same
+   * idea as a weighted average, not a new scoring mechanism. */
+  async score(row: ScoreRow): Promise<ScoreResult> {
+    if (!Array.isArray(row.levels) || row.levels.length < 2) {
+      throw new DecisionError("row.levels must be a list with at least 2 entries");
+    }
+    const decision = await this.decide({
+      id: row.id,
+      state: row.state,
+      question: row.question,
+      options: row.levels.map((level) => ({ id: level.id, description: level.description })),
+    });
+    const indexById = new Map(row.levels.map((level, i) => [level.id, i]));
+    let score = 0;
+    for (const [id, p] of decision.probabilities) {
+      const index = indexById.get(id);
+      if (index !== undefined) score += index * p;
+    }
+    return { id: row.id, score, decision };
+  }
+
+  /** Is `question` true of `state`? Comparable to TypeSafe's `Noun`
+   * primitive. A fixed two-option `decide()` between "true" and "false"
+   * -- `truth` is `decision.probabilities.get("true")`, read the same way
+   * `confidence` is read elsewhere: the probability itself is the useful
+   * signal, not just which side of 0.5 it falls on. */
+  async truth(row: { id: string; state: Row["state"]; question: string }): Promise<TruthResult> {
+    const decision = await this.decide({
+      id: row.id,
+      state: row.state,
+      question: row.question,
+      options: [
+        { id: "true", description: "The statement is true." },
+        { id: "false", description: "The statement is false." },
+      ],
+    });
+    return { id: row.id, truth: decision.probabilities.get("true") ?? 0, decision };
   }
 
   /** Discover this row's options' real token boundaries up front (one
