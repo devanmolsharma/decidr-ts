@@ -14,6 +14,23 @@ function getKey() {
   return keyInput.value.trim();
 }
 
+// One shared OpenAIBackend per API key value, reused across every example
+// run in this tab. OpenAIBackend auto-detects (once per instance) whether
+// its provider accepts the reasoning_effort field it tries first -- a
+// fresh instance per click would repeat that one-time detection (a
+// wasted rejected request) on every single decision instead of once for
+// the whole session.
+let sharedBackend = null;
+let sharedBackendKey = null;
+function getSharedBackend() {
+  const key = getKey();
+  if (!sharedBackend || sharedBackendKey !== key) {
+    sharedBackend = new OpenAIBackend({ apiKey: key, allowBrowser: true });
+    sharedBackendKey = key;
+  }
+  return sharedBackend;
+}
+
 function setKeyStatus(state) {
   if (state === "ok") {
     keyStatus.textContent = "key works";
@@ -182,7 +199,7 @@ function renderRowExample(ex) {
 
     try {
       const client = new Client("gpt-4o-mini", {
-        backend: new OpenAIBackend({ apiKey: key }),
+        backend: getSharedBackend(),
         exhaustive: ex.row.exhaustive ?? true,
       });
       const start = performance.now();
@@ -275,7 +292,7 @@ function renderRaceExample(ex) {
     }, 50);
 
     const decidrPromise = (async () => {
-      const client = new Client("gpt-4o-mini", { backend: new OpenAIBackend({ apiKey: key }) });
+      const client = new Client("gpt-4o-mini", { backend: getSharedBackend() });
       const decision = await client.decide(ex.row);
       const elapsed = performance.now() - raceStart;
       decidrLane.classList.add("border-accent");
@@ -338,7 +355,7 @@ function renderScaleExample() {
     resultEl.innerHTML = spinnerHtml("resolving through the hierarchy...");
 
     let requestCount = 0;
-    const countingBackend = new OpenAIBackend({ apiKey: key });
+    const countingBackend = new OpenAIBackend({ apiKey: key, allowBrowser: true });
     const originalChat = countingBackend.chat.bind(countingBackend);
     countingBackend.chat = (...args) => {
       requestCount++;

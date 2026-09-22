@@ -165,49 +165,72 @@ a preference.
 
 **No general multi-provider LLM abstraction library reliably returns
 logprobs across providers as of this spec version.** Checked directly,
-not assumed: LiteLLM silently drops `logprobs`/`top_logprobs` when
-routing Ollama through its OpenAI-compatible code path (Ollama's own
-`/v1/chat/completions` compat endpoint does not implement logprobs at
-all — closed upstream as "not planned", see `ollama/ollama#16117`).
-Vercel AI SDK removed its normalized cross-provider logprobs surface
-entirely in v5, demoting it to per-provider `providerOptions` with an
-open, previously-shipped-broken bug even for its own flagship OpenAI
-provider (`vercel/ai#7767`). LangChain's `ChatOllama` has an open,
-unresolved logprobs bug (`langchain-ai/langchain#34207`). The common
-failure pattern across all three: the parameter is silently accepted
-and the result comes back empty or absent, never a loud error — the
-single worst failure mode for a library whose entire output is a
-probability distribution.
+not assumed: Vercel AI SDK removed its normalized cross-provider
+logprobs surface entirely in v5, demoting it to per-provider
+`providerOptions` with an open, previously-shipped-broken bug even for
+its own flagship OpenAI provider (`vercel/ai#7767`). LangChain's
+`ChatOllama` has an open, unresolved logprobs bug
+(`langchain-ai/langchain#34207`). LiteLLM's own pre-call capability
+introspection (`get_supported_openai_params`) has been independently
+observed both false-negative (wrongly rejecting a provider that does
+support logprobs) and false-positive (silently dropping a value between
+the raw provider response and its own final result object) for
+unrelated providers. The common failure pattern: the parameter is
+silently accepted and the result comes back empty, wrong, or absent,
+never a loud error — the single worst failure mode for a library whose
+entire output is a probability distribution.
 
 **Reference backends MUST therefore be built on each provider's own
-official, single-provider SDK, never on a multi-provider
-abstraction layer:**
+official SDK, never on a multi-provider abstraction layer:**
 
 - **OpenAI-compatible backend**: the official `openai` package
   (PyPI and npm). Both expose fully typed `logprobs`/`top_logprobs`
   request parameters and a typed `choice.logprobs.content[]` response
   array (note: nested under `.content`, not a bare array — see §3.3).
   Works against any OpenAI-compatible endpoint via a configurable base
-  URL, covering OpenAI itself and third-party OpenAI-compatible hosts
-  confirmed to actually forward logprobs (Together AI, Fireworks,
-  Cerebras, self-hosted vLLM — see `PROVIDERS.md`'s provider table)
-  without a separate client per host. **Not every OpenAI-compatible host
-  actually supports `logprobs`** — Groq, for one, returns an explicit 400
-  error if `logprobs`/`top_logprobs` are supplied at all, despite being
-  otherwise OpenAI-compatible; `PROVIDERS.md` maintains the current
-  checked list of which hosts do and don't, since this varies by
-  provider and changes without notice.
-- **Ollama backend**: the official `ollama` package (PyPI ≥ 0.6.1, npm
-  latest), talking to Ollama's **native** `/api/chat` — never Ollama's
-  own OpenAI-compatibility endpoint, and never through a general
-  abstraction layer that might route through that endpoint. Both official
-  clients expose typed `logprobs`/`top_logprobs` request fields and a
-  typed `logprobs: Logprob[]` response field as of the versions above.
-  **This is a hard invariant, not a style preference: any code path that
-  reaches Ollama through an OpenAI-compatible shim (LiteLLM, Ollama's own
-  `/v1` endpoint, or otherwise) MUST be treated as broken for this
-  library's purposes, regardless of how convenient it looks, because
-  logprobs will silently not come through.**
+  URL, covering OpenAI itself, third-party OpenAI-compatible hosts
+  confirmed to forward logprobs (Together AI, Fireworks, Cerebras,
+  self-hosted vLLM — see `PROVIDERS.md`'s provider table), **and Ollama's
+  own `/v1/chat/completions` endpoint**, without a separate client per
+  host. **Not every OpenAI-compatible host actually supports
+  `logprobs`** — Groq, for one, returns an explicit 400 error if
+  `logprobs`/`top_logprobs` are supplied at all, despite being otherwise
+  OpenAI-compatible; `PROVIDERS.md` maintains the current checked list of
+  which hosts do and don't, since this varies by provider and changes
+  without notice.
+
+  **Correction to an earlier version of this spec, verified live against
+  a real running Ollama server, not assumed from an issue tracker:**
+  Ollama's `/v1/chat/completions` compat endpoint DOES return real,
+  correct, non-null `logprobs`/`top_logprobs` — confirmed with a direct
+  `curl` request returning genuine per-token logprobs and a real ranked
+  `top_logprobs` window. A GitHub issue (`ollama/ollama#16117`) that
+  appeared, from its title and "closed: not planned" status alone, to
+  document this as a real gap was in fact **closed within an hour by its
+  own reporter as a false alarm** — the actual bug was in an unrelated
+  downstream tool that wasn't forwarding request fields correctly, and
+  the reporter's own follow-up comment confirms Ollama's compat endpoint
+  works correctly. Do not infer a provider's real behavior from an
+  issue's title, labels, or closed/not-planned status alone — read the
+  actual resolution, or better, verify live against a real server the
+  way this correction was made.
+
+  Given this, the OpenAI-compatible backend, pointed at
+  `http://127.0.0.1:11434/v1` (or an equivalent remote Ollama host), is
+  the canonical way to reach Ollama in the reference implementations —
+  no second, Ollama-specific SDK dependency is required. This also keeps
+  the TypeScript reference implementation's Ollama backend usable from a
+  browser (the official `ollama` npm package has a hard, unconditional
+  dependency on `node:fs`/`node:path` and cannot be bundled for a
+  browser target at all, unlike the `openai` package, which supports
+  browser use via an explicit opt-in flag).
+
+  A conforming implementation MAY still ship a separate, dedicated Ollama
+  backend using Ollama's own official SDK and its native `/api/chat`
+  shape, for callers who specifically want that SDK's non-chat features
+  (model pull/list/management) alongside `decide()` — but this is a
+  convenience addition, not a correctness requirement, and MUST NOT be
+  the only way a conforming implementation lets a caller reach Ollama.
 
 A conforming implementation MAY add further single-provider backends
 (e.g. a direct Anthropic backend) the same way, adapting that provider's
@@ -241,7 +264,18 @@ same model slug returning logprobs through one upstream and not another,
 determined only at request-routing time. Multiple gateways hardcode
 `logprobs: null` for providers whose own APIs might support it in some
 form, simply because nobody implemented that provider's specific
-transformation.
+transformation. The same principle bit this very spec: an earlier
+version of §3.2 asserted, based on a GitHub issue's title and its
+"closed: not planned" status, that Ollama's OpenAI-compatible endpoint
+did not support logprobs at all. A live `curl` against a real running
+Ollama server returned correct, real logprobs immediately — the issue
+had in fact been closed within an hour by its own reporter as a false
+alarm traced to an unrelated downstream bug, a distinction invisible
+from the issue's title or closed/not-planned metadata alone. **An issue
+tracker's status label is not a capability signal either** — it required
+opening the actual issue body and its resolution comment to find that
+out, which is exactly the kind of surface-level trust this section warns
+against.
 
 **Therefore, a conforming implementation MUST NOT infer logprobs support
 purely from configuration, provider name, or a client library's typed
@@ -274,14 +308,53 @@ a provider that can never produce real logprobs (Anthropic, as of this
 spec version) instead of that provider silently producing a
 `DecisionError` with no distinguishing signal from a transient failure.
 
+### 3.4 Disabling reasoning/thinking mode, and why it can't be done unconditionally
+
+Some models run a hidden reasoning preamble before their visible answer
+by default (this is distinct from, and in addition to, the
+reasoning-focused *models* already excluded in §3.2 for lacking
+`logprobs` support entirely — this section is about models that DO
+support `logprobs` but still emit hidden reasoning tokens first unless
+told not to). When this happens, a `maxTokens: 1` request's single
+generated token lands on a reasoning/thinking token instead of the real
+answer — a silent failure with no error, since a real `logprobs` entry
+still comes back, just for the wrong token.
+
+**Verified live**: Ollama models with a reasoning mode enabled by
+default exhibit exactly this failure through both Ollama's native API
+(which has its own `think: false` field to disable it) and its
+OpenAI-compatible endpoint. On the OpenAI-compatible endpoint
+specifically, the fix is the OpenAI-style `reasoning_effort: "none"`
+request field — verified live to correctly suppress the reasoning
+preamble and return the real answer at position 0 instead.
+
+**This field cannot be sent unconditionally.** Verified live against
+real OpenAI: a standard (non-reasoning) chat model **hard-rejects** an
+unrecognized `reasoning_effort` field with an explicit `400 Bad Request`
+("Unrecognized request argument supplied: reasoning_effort") — this is
+not a silent-ignore situation the way logprobs silently dropping is
+elsewhere in this spec; it actively breaks the request.
+
+A conforming OpenAI-compatible backend implementation MUST therefore
+auto-detect, once per backend instance (not once per request — this
+would defeat the point of avoiding an extra round-trip), whether its
+configured provider accepts `reasoning_effort`: attempt the first real
+request with the field included, and if the response is specifically a
+400 whose error message identifies `reasoning_effort` as the
+unrecognized argument, retry that one request without the field and
+remember not to send it again for the remainder of that backend
+instance's life. Any other error (a genuine auth failure, a network
+error, a 400 for an unrelated reason) MUST propagate normally, not be
+silently retried away.
+
 ## 4. `Client` public API
 
 ```
 Client(model: string, options?: ClientOptions)
 
 ClientOptions {
-  backend?: Backend                   // default: an OllamaBackend against http://127.0.0.1:11434
-  host?: string                       // only used when backend is omitted (constructs default OllamaBackend)
+  backend?: Backend                   // default: an OpenAI-compatible backend pointed at http://127.0.0.1:11434/v1 (a local Ollama, see §3.2)
+  host?: string                       // only used when backend is omitted (constructs the default backend against this host instead)
   timeoutMs?: number
   temperature?: number = 1.0          // softmax temperature, NOT the model's sampling temperature (always 0, see §3)
   exhaustive?: boolean = true         // see §6.3

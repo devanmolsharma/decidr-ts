@@ -16,14 +16,15 @@ If you want the Python version instead, that's the one to use.
 npm install decidr-ts
 ```
 
-Zero dependencies. Node 18+ (uses the global `fetch`).
+Node 18+. One dependency: the official [`openai`](https://www.npmjs.com/package/openai) SDK -- see [Backends](#backends) for why a real dependency was chosen over hand-rolled HTTP, and [SPEC.md §3.2](docs/SPEC.md#32-reference-backend-implementation-strategy-official-per-provider-sdks-never-a-multi-provider-abstraction) for the researched reasoning behind it.
 
 ## Quickstart: local model via Ollama
 
 ```ts
 import { Client } from "decidr-ts";
 
-const client = new Client("qwen3.5:4b"); // any Ollama model, defaults to http://127.0.0.1:11434
+const client = new Client("qwen3.5:4b"); // any Ollama model -- Client() talks to Ollama's
+                                          // OpenAI-compatible endpoint at http://127.0.0.1:11434/v1 by default
 
 const decision = await client.decide({
   id: "ticket-42",
@@ -57,8 +58,10 @@ const decision = await client.decide(row);
 ```
 
 `OpenAIBackend` talks to any server that speaks the OpenAI
-`/v1/chat/completions` wire format -- pass `baseUrl` to point it at a
+`/v1/chat/completions` wire format -- pass `baseURL` to point it at a
 self-hosted or third-party endpoint instead of `https://api.openai.com/v1`.
+This is also what the default `Client()` above uses under the hood, just
+pointed at a local Ollama instead.
 
 **Only some models support `logprobs`.** Standard chat models (the GPT-4o
 family and similar) do. Reasoning models (the o-series and similar
@@ -106,21 +109,35 @@ similar ids went from 5 requests to 1.
 
 ## Backends
 
-| Backend | Talks to | Dependencies |
-|---|---|---|
-| `OllamaBackend` (default) | a local/remote Ollama server's `/api/chat` | none (`fetch`) |
-| `OpenAIBackend` | any OpenAI-compatible `/v1/chat/completions` endpoint | none (`fetch`) |
+`OpenAIBackend`, built on the official `openai` SDK, is the only
+backend -- and it's enough. It talks to any OpenAI-compatible
+`/v1/chat/completions` endpoint: OpenAI itself, Ollama's own
+OpenAI-compatible endpoint (verified live to return real, correct
+`logprobs` -- see [docs/SPEC.md §3.2](docs/SPEC.md#32-reference-backend-implementation-strategy-official-per-provider-sdks-never-a-multi-provider-abstraction)
+for why an earlier assumption that it didn't was wrong), and other
+OpenAI-compatible hosts confirmed to forward `logprobs` correctly (see
+[PROVIDERS.md](docs/PROVIDERS.md)). There is deliberately no separate
+Ollama-specific backend or multi-provider abstraction layer --
+[PROVIDERS.md](docs/PROVIDERS.md#gateways-and-unified-multi-provider-clients-none-solve-this-reliably)
+has the full researched reasoning for why every general-purpose
+multi-provider client checked (LiteLLM, OpenRouter, Vercel AI SDK,
+LangChain, and others) has a silent or structural logprobs gap for at
+least one major provider.
 
-Both implement the same `Backend` interface (`chat(model, messages)`), so
-you can write your own for another provider -- `Client` only ever calls
-that one method.
+You can write your own backend for another provider by implementing the
+same shape `Client` calls -- there's no base class to extend, just three
+methods:
 
 ```ts
-import { Backend, ChatMessage, ChatResult } from "decidr-ts";
+import type { Backend, ChatMessage, ChatResult } from "decidr-ts";
 
-class MyBackend extends Backend {
-  async chat(model: string, messages: ChatMessage[]): Promise<ChatResult> {
+class MyBackend implements Backend {
+  async chat(model: string, messages: ChatMessage[], maxTokens = 1): Promise<ChatResult> {
     // return { content, logprobs } in the shape documented on Backend.chat
+  }
+  async warmup(model: string): Promise<void> { /* pre-warm a connection, or no-op */ }
+  async discoverTokensBatch(model: string, words: string[]): Promise<Map<string, string[]>> {
+    // see docs/SPEC.md §8 for the default algorithm to mirror, or delegate to chat()
   }
 }
 ```
@@ -194,14 +211,17 @@ Differences from the Python library, and why:
   There's currently no flag to opt back into Python's behavior in
   decidr-ts; use the Python library if that guarantee matters more to
   you than request count.
-- **Backends.** Python ships `OllamaBackend` (stdlib only) and
-  `LiteLLMBackend` (optional extra, for everything LiteLLM supports --
-  notably *not* Ollama's logprobs, which LiteLLM doesn't forward). The TS
-  port ships `OllamaBackend` and `OpenAIBackend` instead: Node's `fetch`
-  makes a hand-written OpenAI-compatible backend just as dependency-free
-  as Ollama's, and it's a closer match to how most hosted models are
-  actually reached from JS/TS than a LiteLLM-style universal client would
-  be.
+- **Backends.** Python ships `OllamaBackend` (stdlib only, hand-rolled
+  HTTP) and `LiteLLMBackend` (optional extra). The TS port ships a single
+  `OpenAIBackend`, built on the official `openai` SDK, that reaches
+  Ollama too (via its OpenAI-compatible endpoint) -- see
+  [Backends](#backends) above and [docs/SPEC.md §3.2](docs/SPEC.md#32-reference-backend-implementation-strategy-official-per-provider-sdks-never-a-multi-provider-abstraction)
+  for the full researched reasoning. This means decidr-ts is not
+  dependency-free the way its Python counterpart's default path is --
+  a deliberate tradeoff of one real, well-maintained dependency (with
+  official logprobs typing, retries, and error handling) over hand-rolled
+  HTTP, made after directly verifying that no lighter-weight
+  multi-provider alternative actually returns logprobs reliably.
 - **Ordered collections.** Python dicts preserve insertion order
   unconditionally. JavaScript's plain objects reorder integer-like string
   keys (e.g. `"2"`) ahead of insertion order regardless of when they were
@@ -219,10 +239,11 @@ Differences from the Python library, and why:
 
 ## Docs
 
+- [SPEC.md](docs/SPEC.md) — the full implementation specification: precise enough for a clean-room reimplementation in any language
 - [PREFIX_MATCHING.md](docs/PREFIX_MATCHING.md) — how a multi-token id gets scored from raw logprobs
 - [HIERARCHY.md](docs/HIERARCHY.md) — why option ids form a real tree, and the `exhaustive` tradeoff
 - [NAMING_IDS.md](docs/NAMING_IDS.md) — the id format rules and why each one exists
-- [PROVIDERS.md](docs/PROVIDERS.md) — worked examples for Ollama, OpenAI, and other OpenAI-compatible servers
+- [PROVIDERS.md](docs/PROVIDERS.md) — worked examples for Ollama, OpenAI, and other OpenAI-compatible servers, plus the full checked provider matrix
 
 ## License
 

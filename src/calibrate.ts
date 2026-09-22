@@ -1,17 +1,10 @@
-/**
- * Is `Decision.probabilities` actually trustworthy as a probability, or
- * just a score that happens to be shaped like one? `fitTemperature` finds
- * one scalar `T` that rescales logprobs (via `softmax`) to minimize
- * negative log-likelihood against real outcomes, and reports Expected
- * Calibration Error before/after so the improvement is visible, not just
- * assumed. `evaluateOutOfFold` cross-validates that fit so the reported
- * improvement isn't just overfit to the sample it was measured on.
- */
+/** Calibration: is `Decision.probabilities` actually trustworthy, or just
+ * a score shaped like one? See docs/SPEC.md §7. */
 
 import { softmax } from "./core.js";
 import type { Decision } from "./types.js";
 
-const DEFAULT_GRID: number[] = Array.from({ length: 100 }, (_, i) => Math.round((0.1 * (i + 1)) * 100) / 100);
+const DEFAULT_GRID: number[] = Array.from({ length: 100 }, (_, i) => Math.round(0.1 * (i + 1) * 100) / 100);
 
 export interface CalibrationResult {
   temperature: number;
@@ -21,7 +14,6 @@ export interface CalibrationResult {
   accuracy: number;
 }
 
-/** One decision paired with which option id was actually correct. */
 export interface CalibrationPair {
   decision: Decision;
   correctId: string;
@@ -33,8 +25,7 @@ function usablePairs(pairs: CalibrationPair[]): CalibrationPair[] {
 
 function rescaledProb(pair: CalibrationPair, temperature: number): number {
   const ids = [...pair.decision.logprobs.keys()];
-  const logprobs = ids.map((id) => pair.decision.logprobs.get(id)!);
-  const probs = softmax(logprobs, temperature);
+  const probs = softmax(ids.map((id) => pair.decision.logprobs.get(id)!), temperature);
   const idx = ids.indexOf(pair.correctId);
   return idx === -1 ? 0 : probs[idx]!;
 }
@@ -47,15 +38,12 @@ function nll(pairs: CalibrationPair[], temperature: number): number {
 export function expectedCalibrationError(pairs: CalibrationPair[], temperature: number, bins = 10): number {
   const scored = pairs.map((p) => {
     const ids = [...p.decision.logprobs.keys()];
-    const logprobs = ids.map((id) => p.decision.logprobs.get(id)!);
-    const probs = softmax(logprobs, temperature);
+    const probs = softmax(ids.map((id) => p.decision.logprobs.get(id)!), temperature);
     let bestIdx = 0;
     for (let i = 1; i < probs.length; i++) {
       if (probs[i]! > probs[bestIdx]!) bestIdx = i;
     }
-    const confidence = probs[bestIdx]!;
-    const correct = ids[bestIdx] === p.correctId;
-    return { confidence, correct };
+    return { confidence: probs[bestIdx]!, correct: ids[bestIdx] === p.correctId };
   });
 
   const buckets: { confidence: number; correct: boolean }[][] = Array.from({ length: bins }, () => []);
@@ -78,9 +66,7 @@ export function expectedCalibrationError(pairs: CalibrationPair[], temperature: 
 
 function accuracyAt(pairs: CalibrationPair[]): number {
   let correct = 0;
-  for (const p of pairs) {
-    if (p.decision.choice === p.correctId) correct++;
-  }
+  for (const p of pairs) if (p.decision.choice === p.correctId) correct++;
   return correct / pairs.length;
 }
 
@@ -100,19 +86,13 @@ export function fitTemperature(pairs: CalibrationPair[], grid: number[] = DEFAUL
     }
   }
 
-  // Rescaling a softmax by a positive temperature must never change which
-  // option had the highest probability -- otherwise this isn't calibration,
-  // it's silently relabeling decisions.
+  // Correctness invariant, not just documentation (SPEC.md §7): rescaling
+  // by the chosen temperature must never change any pair's argmax choice.
   for (const p of usable) {
     const ids = [...p.decision.logprobs.keys()];
-    const before = softmax(
-      ids.map((id) => p.decision.logprobs.get(id)!),
-      1.0,
-    );
-    const after = softmax(
-      ids.map((id) => p.decision.logprobs.get(id)!),
-      bestT,
-    );
+    const values = ids.map((id) => p.decision.logprobs.get(id)!);
+    const before = softmax(values, 1.0);
+    const after = softmax(values, bestT);
     const argmax = (probs: number[]) => probs.reduce((best, v, i) => (v > probs[best]! ? i : best), 0);
     if (argmax(before) !== argmax(after)) {
       throw new Error("temperature rescaling changed a decision's argmax -- this should be impossible");
@@ -128,9 +108,6 @@ export function fitTemperature(pairs: CalibrationPair[], grid: number[] = DEFAUL
   };
 }
 
-// A small seeded PRNG (mulberry32) standing in for Python's random.Random(seed) --
-// Node has no built-in seeded RNG, and cross-fold shuffling needs to be
-// reproducible for a stated seed to mean anything.
 function mulberry32(seed: number): () => number {
   let a = seed;
   return () => {

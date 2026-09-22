@@ -7,22 +7,32 @@
  *
  * Needs a vision-capable model; OpenAIBackend + gpt-4o-mini by default.
  * Ollama also works with a vision-capable local model (e.g. llava, or a
- * multimodal qwen build) via --ollama <model>.
+ * multimodal qwen build) via --ollama <model> (talks to Ollama's
+ * OpenAI-compatible endpoint, same as the default Client()).
  */
-import { Client, OllamaBackend, OpenAIBackend } from "../../src/index.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { Client, OpenAIBackend } from "../../src/index.js";
 
 const ollamaModelArg = process.argv.indexOf("--ollama");
 const useOllama = ollamaModelArg !== -1;
 const model = useOllama ? process.argv[ollamaModelArg + 1]! : "gpt-4o-mini";
-const backend = useOllama ? new OllamaBackend() : new OpenAIBackend({ apiKey: process.env.OPENAI_API_KEY });
+const backend = useOllama ? undefined : new OpenAIBackend({ apiKey: process.env.OPENAI_API_KEY });
 
 const client = new Client(model, { backend });
+
+// A locally-shipped, CC-0 image (not a hotlinked URL) -- an earlier
+// hotlinked source silently started serving a different photo between
+// two test runs in the same development session, which is not a risk
+// worth taking for an example whose whole point is a correct result.
+const imagePath = fileURLToPath(new URL("../webui/public/assets/red-panda.jpg", import.meta.url));
+const imageData = readFileSync(imagePath).toString("base64");
 
 const row = {
   id: "vision-1",
   state: [
     { type: "text" as const, text: "Look at this photo:" },
-    { type: "image" as const, url: "https://images.unsplash.com/photo-1547721064-da6cfb341d50?w=640" },
+    { type: "image" as const, data: imageData, mimeType: "image/jpeg" },
   ],
   question: "What animal is in this photo?",
   options: [

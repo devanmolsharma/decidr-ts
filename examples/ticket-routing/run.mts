@@ -5,14 +5,16 @@
  *
  *   npx tsx examples/ticket-routing/run.mts
  *
- * Uses OllamaBackend by default (needs a local Ollama with a pulled model);
- * pass --openai to use OpenAIBackend instead (needs OPENAI_API_KEY).
+ * Uses a local Ollama by default (needs a pulled model; Client() talks to
+ * Ollama's OpenAI-compatible endpoint by default, no separate backend
+ * needed); pass --openai to use OpenAI directly instead (needs
+ * OPENAI_API_KEY).
  */
-import { Client, OllamaBackend, OpenAIBackend } from "../../src/index.js";
+import { Client, OpenAIBackend } from "../../src/index.js";
 
 const useOpenAI = process.argv.includes("--openai");
 const model = useOpenAI ? "gpt-4o-mini" : "qwen3.5:4b";
-const backend = useOpenAI ? new OpenAIBackend({ apiKey: process.env.OPENAI_API_KEY }) : new OllamaBackend();
+const backend = useOpenAI ? new OpenAIBackend({ apiKey: process.env.OPENAI_API_KEY }) : undefined;
 
 const client = new Client(model, { backend, exhaustive: true });
 

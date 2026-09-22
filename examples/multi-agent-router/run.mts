@@ -6,11 +6,11 @@
  *
  *   npx tsx examples/multi-agent-router/run.mts
  */
-import { Client, OllamaBackend, OpenAIBackend } from "../../src/index.js";
+import { Client, OpenAIBackend } from "../../src/index.js";
 
 const useOpenAI = process.argv.includes("--openai");
 const model = useOpenAI ? "gpt-4o-mini" : "qwen3.5:4b";
-const backend = useOpenAI ? new OpenAIBackend({ apiKey: process.env.OPENAI_API_KEY }) : new OllamaBackend();
+const backend = useOpenAI ? new OpenAIBackend({ apiKey: process.env.OPENAI_API_KEY }) : undefined;
 
 const client = new Client(model, { backend });
 

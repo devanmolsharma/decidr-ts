@@ -26,27 +26,14 @@ test("TokenCache: save() with persist:false never throws", () => {
 
 function multiTokenRow(): Row {
   return {
-    id: "r1",
-    state: "s",
-    question: "q",
-    options: [
-      { id: "billing", description: "d" },
-      { id: "shipping", description: "d" },
-    ],
+    id: "r1", state: "s", question: "q",
+    options: [{ id: "billing", description: "d" }, { id: "shipping", description: "d" }],
   };
 }
 
 test("Client with a wrong pre-seeded prediction still produces a correct decision", async () => {
   const cache = new TokenCache({ persist: false });
-  // Seed a plausible-looking but entirely WRONG prediction for "billing" --
-  // if speculation were trusted blindly instead of verified against the
-  // real response, this would corrupt the result. It must not: matchStep
-  // only ever consumes a token that's genuinely present in the real
-  // topLogprobs, so a wrong speculative guess is simply never looked up
-  // (groupByContext never produces the bogus "consumed" key the guess was
-  // keyed under) and the normal reactive path runs instead.
   cache.set("test-model", "billing", ["totally", "wrong", "guess"]);
-
   const backend = new FakeBackend(() => singleTokenReply("billing", -0.1, [["shipping", -2.0]]));
   const client = new Client("test-model", { backend, cache });
   const decision = await client.decide(multiTokenRow());
@@ -57,7 +44,6 @@ test("Client with a wrong pre-seeded prediction still produces a correct decisio
 test("Client with a correct pre-seeded prediction still produces the same correct decision", async () => {
   const cache = new TokenCache({ persist: false });
   cache.set("test-model", "billing", ["billing"]);
-
   const backend = new FakeBackend(() => singleTokenReply("billing", -0.1, [["shipping", -2.0]]));
   const client = new Client("test-model", { backend, cache });
   const decision = await client.decide(multiTokenRow());
@@ -69,17 +55,31 @@ test("Client: a TokenCache instance can be shared across two Clients", async () 
   const backend1 = new FakeBackend(() => singleTokenReply("billing", -0.1, [["shipping", -2.0]]));
   const client1 = new Client("shared-model", { backend: backend1, cache });
   await client1.decide(multiTokenRow());
-
-  // The second Client reuses the same cache instance and should see what
-  // the first one just learned.
   assert.deepEqual(cache.get("shared-model", "billing"), ["billing"]);
 });
 
-test("Client: repeated decide() calls against the same backend produce identical results with caching on", async () => {
+test("Client.warmup: seeds the cache via discoverTokensBatch, then decides correctly", async () => {
+  const cache = new TokenCache({ persist: false });
   const backend = new FakeBackend(() => singleTokenReply("billing", -0.1, [["shipping", -2.0]]));
-  const client = new Client("test-model", { backend, cache: { persist: false } });
-  const first = await client.decide(multiTokenRow());
-  const second = await client.decide(multiTokenRow());
-  assert.equal(first.choice, second.choice);
-  assert.equal(first.probabilities.get("billing"), second.probabilities.get("billing"));
+  const client = new Client("test-model", { backend, cache });
+  const decision = await client.warmup(multiTokenRow());
+  assert.equal(decision.choice, "billing");
+  // FakeBackend's discoverTokensBatch treats each word as one opaque token.
+  assert.deepEqual(cache.get("test-model", "billing"), ["billing"]);
+});
+
+test("Client.warmup: does not re-discover an option id that's already cached", async () => {
+  const cache = new TokenCache({ persist: false });
+  cache.set("test-model", "billing", ["billing"]);
+  cache.set("test-model", "shipping", ["shipping"]);
+  let discoverCalls = 0;
+  const backend = new FakeBackend(() => singleTokenReply("billing", -0.1, [["shipping", -2.0]]));
+  const originalDiscover = backend.discoverTokensBatch.bind(backend);
+  backend.discoverTokensBatch = async (model, words) => {
+    discoverCalls++;
+    return originalDiscover(model, words);
+  };
+  const client = new Client("test-model", { backend, cache });
+  await client.warmup(multiTokenRow());
+  assert.equal(discoverCalls, 0);
 });

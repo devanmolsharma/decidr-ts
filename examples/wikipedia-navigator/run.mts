@@ -17,11 +17,11 @@
  */
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
-import { Client, MAX_BRANCHES_PER_LEVEL, OllamaBackend, OpenAIBackend } from "../../src/index.js";
+import { Client, MAX_BRANCHES_PER_LEVEL, OpenAIBackend } from "../../src/index.js";
 
 const useOpenAI = process.argv.includes("--openai");
 const model = useOpenAI ? "gpt-4o" : "qwen3.5:4b";
-const backend = useOpenAI ? new OpenAIBackend({ apiKey: process.env.OPENAI_API_KEY }) : new OllamaBackend();
+const backend = useOpenAI ? new OpenAIBackend({ apiKey: process.env.OPENAI_API_KEY }) : undefined;
 const client = new Client(model, { backend });
 
 const START = "https://en.wikipedia.org/wiki/Chess";

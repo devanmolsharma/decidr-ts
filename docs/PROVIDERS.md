@@ -4,21 +4,26 @@ How to point `Client` at a specific model provider, with a full working example 
 
 **`decidr` needs a model that returns `logprobs`, and not every model does.** This isn't specific to one provider — it's most consistently true of reasoning-focused models (OpenAI's o-series and similar reasoning models on other providers), which commonly reject or ignore `logprobs` entirely because their API contract is built around a hidden reasoning step rather than a plain next-token distribution. Standard chat models (the GPT-4o family, and most open-weight chat models) support it. If `decide()` fails with something like "no logprobs," a reasoning model is the first thing to check.
 
-Unlike the [Python library](https://github.com/devanmolsharma/decidr), which reaches most hosted providers through LiteLLM, this port ships exactly two backends, both dependency-free (Node's global `fetch`, nothing else): `OllamaBackend` and `OpenAIBackend`. `OpenAIBackend` isn't OpenAI-only — it speaks the OpenAI-compatible `/v1/chat/completions` wire format, which covers OpenAI itself and most self-hosted or hosted-elsewhere servers that speak the same shape (see [Any other OpenAI-compatible server](#any-other-openai-compatible-server) below).
+Unlike the [Python library](https://github.com/devanmolsharma/decidr), which reaches most hosted providers through LiteLLM, this port ships exactly one backend, built on the official `openai` SDK: `OpenAIBackend`. It isn't OpenAI-only — it speaks the OpenAI-compatible `/v1/chat/completions` wire format, which covers OpenAI itself, Ollama's own OpenAI-compatible endpoint (verified live to return real, correct `logprobs` — see [docs/SPEC.md §3.2](SPEC.md#32-reference-backend-implementation-strategy-official-per-provider-sdks-never-a-multi-provider-abstraction)), and most self-hosted or hosted-elsewhere servers that speak the same shape (see [Any other OpenAI-compatible server](#any-other-openai-compatible-server) below).
 
 ## Ollama (default, local)
 
 ```ts
 import { Client } from "decidr-ts";
 
-const client = new Client("qwen3.5:4b"); // talks to http://127.0.0.1:11434
+const client = new Client("qwen3.5:4b"); // talks to Ollama's OpenAI-compatible endpoint at http://127.0.0.1:11434/v1
 ```
 
 ```ts
-const client = new Client("qwen3.5:4b", { host: "http://192.168.1.50:11434" }); // a remote Ollama
+const client = new Client("qwen3.5:4b", { host: "http://192.168.1.50:11434/v1" }); // a remote Ollama
 ```
 
-Nothing to install beyond `decidr` itself.
+Models with a reasoning/thinking mode enabled by default (common on
+newer Ollama models) are handled automatically: `OpenAIBackend` tries
+`reasoning_effort: "none"` on its first request and falls back
+transparently if the provider doesn't recognize that field — see
+[docs/SPEC.md §3.4](SPEC.md#34-disabling-reasoningthinking-mode-and-why-it-cant-be-done-unconditionally)
+for why this can't just be sent unconditionally to every provider.
 
 ## OpenAI
 
@@ -50,13 +55,13 @@ import { Client, OpenAIBackend } from "decidr-ts";
 
 const client = new Client("some-model", {
   backend: new OpenAIBackend({
-    baseUrl: "https://my-inference-host.example.com/v1",
+    baseURL: "https://my-inference-host.example.com/v1",
     apiKey: process.env.MY_PROVIDER_API_KEY,
   }),
 });
 ```
 
-`OpenAIBackend(baseUrl, apiKey)` works against anything that implements `POST {baseUrl}/chat/completions` in the OpenAI shape and supports `logprobs`/`top_logprobs` — many self-hosted inference servers (vLLM, and others with an OpenAI-compatible front end) and some hosted third-party APIs qualify. Whether logprobs specifically are supported and forwarded correctly is up to that server; if `decide()` fails with a "no logprobs" error against a server you expected to support it, check that server's own OpenAI-compatibility docs for `logprobs` first.
+`OpenAIBackend({ baseURL, apiKey })` works against anything that implements `POST {baseUrl}/chat/completions` in the OpenAI shape and supports `logprobs`/`top_logprobs` — many self-hosted inference servers (vLLM, and others with an OpenAI-compatible front end) and some hosted third-party APIs qualify. Whether logprobs specifically are supported and forwarded correctly is up to that server; if `decide()` fails with a "no logprobs" error against a server you expected to support it, check that server's own OpenAI-compatibility docs for `logprobs` first.
 
 ### How to tell if a provider will work, before wiring it up
 
@@ -128,29 +133,38 @@ If Anthropic adds logprobs support to the Messages API in the future, `OpenAIBac
 
 ## What's verified, and what isn't
 
-`OllamaBackend`'s request construction and response handling are covered by live tests against a real running model, and by unit tests against a scripted fake backend.
-
-`OpenAIBackend`'s request construction and response normalization are unit-tested against the documented OpenAI `/v1/chat/completions` response shape. What is **not** verified in this project: an actual live call to OpenAI or any other hosted provider through it — that needs an API key this project doesn't have. The Ollama example above is verified live; the OpenAI examples are correct usage against the documented API shape, not confirmed wire behavior.
+`OpenAIBackend`'s request construction and response handling are covered by unit tests against a stubbed transport, and have been verified live against both a real running Ollama server (via its OpenAI-compatible endpoint) and real OpenAI directly, including the multimodal (image) path and the `reasoning_effort` auto-detection fallback. Third-party OpenAI-compatible hosts (Together AI, Fireworks, and others listed above) are covered by their own documented `logprobs` support, checked directly against their docs, but have not all been individually verified live by this project against a real account on every one of them.
 
 ## Writing your own backend
 
-For a provider whose API you'd rather call directly, or that doesn't speak the OpenAI-compatible shape: subclass `Backend` and implement one method.
+For a provider whose API you'd rather call directly, or that doesn't speak the OpenAI-compatible shape: implement the `Backend` interface (no base class to extend).
 
 ```ts
-import { Backend, ChatMessage, ChatResult } from "decidr-ts";
+import type { Backend, ChatMessage, ChatResult } from "decidr-ts";
 
-class MyBackend extends Backend {
-  async chat(model: string, messages: ChatMessage[]): Promise<ChatResult> {
-    // Send `messages` to the model, asking it to predict exactly one
-    // token at temperature 0. Return:
+class MyBackend implements Backend {
+  async chat(model: string, messages: ChatMessage[], maxTokens = 1): Promise<ChatResult> {
+    // Send `messages` to the model, asking it to predict `maxTokens`
+    // tokens (usually just 1) at temperature 0. Return:
     return {
       content: "...",     // the model's own reply, or null
-      logprobs: [{         // zero entries, or exactly one
+      logprobs: [{         // zero entries, or one per generated position
         token: "...",
         logprob: -0.1,
         topLogprobs: [{ token: "...", logprob: -0.1 }],
       }],
     };
+  }
+
+  async warmup(model: string): Promise<void> {
+    // Pre-establish a connection, or no-op if your provider has nothing to warm.
+  }
+
+  async discoverTokensBatch(model: string, words: string[]): Promise<Map<string, string[]>> {
+    // See docs/SPEC.md §8 for the default algorithm (ask the model to
+    // list the words back, one per line, and read the token boundaries
+    // off the response) if your provider doesn't have a cheaper way.
+    return new Map();
   }
 }
 ```

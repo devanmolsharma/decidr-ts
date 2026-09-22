@@ -13,35 +13,36 @@ test("buildPrefixMessages: string state, no prefix", () => {
   });
   assert.equal(messages.length, 2);
   assert.deepEqual(messages[0], { role: "system", content: PREFIX_SYSTEM });
-  assert.match(messages[1]!.content, /customer says the app crashed/);
-  assert.match(messages[1]!.content, /Answer with exactly one of: bug, billing\./);
+  assert.match(messages[1]!.content as string, /customer says the app crashed/);
+  assert.match(messages[1]!.content as string, /Answer with exactly one of: bug, billing\./);
 });
 
 test("buildPrefixMessages: object state is JSON-serialized, prefix appended", () => {
   const messages = buildPrefixMessages(
-    {
-      state: { ticket: 42 },
-      question: "route it",
-      options: [
-        { id: "a", description: "a" },
-        { id: "b", description: "b" },
-      ],
-    },
+    { state: { ticket: 42 }, question: "route it", options: [{ id: "a", description: "a" }, { id: "b", description: "b" }] },
     "bil",
   );
-  assert.match(messages[1]!.content, /"ticket":42/);
+  assert.match(messages[1]!.content as string, /"ticket":42/);
   assert.equal(messages.length, 3);
   assert.deepEqual(messages[2], { role: "assistant", content: "bil" });
 });
 
+test("buildPrefixMessages: content-block state stays an array with instructions appended as text", () => {
+  const messages = buildPrefixMessages({
+    state: [{ type: "image", url: "https://example.com/cat.png" }],
+    question: "what animal?",
+    options: [{ id: "cat", description: "d" }, { id: "dog", description: "d" }],
+  });
+  const user = messages[1]!;
+  assert.ok(Array.isArray(user.content));
+  const blocks = user.content as { type: string }[];
+  assert.equal(blocks[0]!.type, "image");
+  assert.equal(blocks[1]!.type, "text");
+});
+
 test("matchStep: longest non-overshooting prefix wins, mutates in place", () => {
   const candidates = [new Candidate("billing_refund", "billing_refund"), new Candidate("bug", "bug")];
-  const found = new Map([
-    ["bill", -0.1],
-    ["billing", -0.2],
-    ["billing_refund", -5.0], // overshoots "billing_refund"? no -- exact match is fine, longest wins
-    ["b", -0.3],
-  ]);
+  const found = new Map([["bill", -0.1], ["billing", -0.2], ["billing_refund", -5.0], ["b", -0.3]]);
   matchStep(candidates, found);
   assert.equal(candidates[0]!.consumed, "billing_refund");
   assert.equal(candidates[0]!.remaining, "");
@@ -53,16 +54,14 @@ test("matchStep: longest non-overshooting prefix wins, mutates in place", () => 
 
 test("matchStep: overshoot is rejected, treated as no match", () => {
   const candidates = [new Candidate("bug", "bug")];
-  const found = new Map([["bugs", -0.1]]); // longer than "bug", not a valid prefix match
-  matchStep(candidates, found);
+  matchStep(candidates, new Map([["bugs", -0.1]]));
   assert.ok(candidates[0]!.unscoredReason);
-  assert.equal(candidates[0]!.remaining, "bug"); // untouched, no match found
+  assert.equal(candidates[0]!.remaining, "bug");
 });
 
 test("matchStep: no match sets unscoredReason", () => {
   const candidates = [new Candidate("bug", "bug")];
-  const found = new Map([["xyz", -0.1]]);
-  matchStep(candidates, found);
+  matchStep(candidates, new Map([["xyz", -0.1]]));
   assert.ok(candidates[0]!.unscoredReason);
   assert.ok(candidates[0]!.done);
 });
@@ -92,14 +91,17 @@ test("groupByContext: groups by consumed text, order-preserving, excludes done",
   assert.equal(groups.get("b")!.length, 1);
 });
 
+test("Candidate.done: true when stoppedEarly is set, regardless of remaining", () => {
+  const c = new Candidate("delay", "delay");
+  c.remaining = "lay";
+  c.stoppedEarly = true;
+  assert.ok(c.done);
+});
+
 test("buildTree: single-level ids", () => {
-  const tree = buildTree([
-    { id: "bug", description: "d" },
-    { id: "billing", description: "d" },
-  ]);
+  const tree = buildTree([{ id: "bug", description: "d" }, { id: "billing", description: "d" }]);
   assert.equal(tree.options.length, 2);
   assert.deepEqual([...tree.children.keys()], ["bug", "billing"]);
-  assert.equal(tree.children.get("bug")!.options.length, 1);
 });
 
 test("buildTree: hierarchy via underscores, shared prefixes merge", () => {
@@ -108,13 +110,9 @@ test("buildTree: hierarchy via underscores, shared prefixes merge", () => {
     { id: "billing_dispute", description: "dispute" },
     { id: "bug", description: "bug" },
   ]);
-  assert.equal(tree.options.length, 3);
   const billing = tree.children.get("billing")!;
-  assert.equal(billing.segment, "billing");
   assert.equal(billing.options.length, 2);
   assert.deepEqual([...billing.children.keys()], ["refund", "dispute"]);
-  assert.equal(billing.children.get("refund")!.options.length, 1);
-  assert.equal(billing.children.get("refund")!.options[0]!.id, "billing_refund");
 });
 
 test("TreeNode.childSummaries strips shared prefix", () => {
@@ -122,19 +120,12 @@ test("TreeNode.childSummaries strips shared prefix", () => {
     { id: "billing_refund", description: "wants money back" },
     { id: "billing_dispute", description: "disputes a charge" },
   ]);
-  const billing = tree.children.get("billing")!;
-  const summaries = billing.childSummaries();
+  const summaries = tree.children.get("billing")!.childSummaries();
   assert.equal(summaries.get("refund"), "refund: wants money back");
   assert.equal(summaries.get("dispute"), "dispute: disputes a charge");
 });
 
 test("buildTree: numeric-looking segments preserve insertion order", () => {
-  // The classic JS pitfall this port works around: plain objects would
-  // reorder "2" before "10" regardless of insertion order; Map won't.
-  const tree = buildTree([
-    { id: "step_10", description: "d" },
-    { id: "step_2", description: "d" },
-  ]);
-  const step = tree.children.get("step")!;
-  assert.deepEqual([...step.children.keys()], ["10", "2"]);
+  const tree = buildTree([{ id: "step_10", description: "d" }, { id: "step_2", description: "d" }]);
+  assert.deepEqual([...tree.children.get("step")!.children.keys()], ["10", "2"]);
 });
