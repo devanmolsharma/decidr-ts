@@ -98,7 +98,6 @@ export function ExplainStepByStepDialog({ result }: { question: QuestionSpec; re
   const { rawAnswer, choice, probabilities } = decision;
   const confidence = probabilities.get(choice) ?? 0;
   const allIds = result.type === "choice" ? result.allOptionIds : result.type === "score" ? result.allLevelIds : ["true", "false"];
-  const firstCall = result.calls[0];
 
   const finalLabel =
     result.type === "choice"
@@ -122,23 +121,23 @@ export function ExplainStepByStepDialog({ result }: { question: QuestionSpec; re
         </DialogHeader>
 
         <div className="space-y-5">
-          <div>
-            <StepLabel n={1} text="Real request sent to the provider" />
-            {firstCall ? <RawRequest call={firstCall} /> : <div className="text-[11.5px] text-muted-foreground">no request recorded</div>}
-          </div>
+          {result.calls.length === 0 && (
+            <div className="text-[11.5px] text-muted-foreground">no requests recorded for this result</div>
+          )}
 
-          <div>
-            <StepLabel n={2} text="Real response -- every token, real logprob" />
-            {firstCall ? <RawTopLogprobs call={firstCall} /> : <div className="text-[11.5px] text-muted-foreground">no response recorded</div>}
-            {result.calls.length > 1 && (
-              <div className="text-[10.5px] text-muted-foreground mt-1.5 font-mono">
-                +{result.calls.length - 1} more round{result.calls.length > 2 ? "s" : ""} sent the same way
+          {result.calls.map((call, i) => (
+            <div key={i}>
+              <StepLabel n={i * 2 + 1} text={`Round ${i + 1} -- real request sent to the provider`} />
+              <RawRequest call={call} />
+              <div className="mt-3">
+                <StepLabel n={i * 2 + 2} text={`Round ${i + 1} -- real response, every token, real logprob`} />
+                <RawTopLogprobs call={call} />
               </div>
-            )}
-          </div>
+            </div>
+          ))}
 
           <div>
-            <StepLabel n={3} text="Real logprob → real probability, per candidate" />
+            <StepLabel n={result.calls.length * 2 + 1} text="Every round's logprob, summed → real probability per candidate" />
             <DistributionChart allOptionIds={allIds} decision={decision} />
             <RawJsonToggle
               data={{ logprobs: decision.logprobs, probabilities: decision.probabilities, unscored: decision.unscored }}
@@ -146,7 +145,7 @@ export function ExplainStepByStepDialog({ result }: { question: QuestionSpec; re
           </div>
 
           <div>
-            <StepLabel n={4} text="Final result" />
+            <StepLabel n={result.calls.length * 2 + 2} text="Final result" />
             <div className="rounded-lg border border-signal/40 bg-signal/10 p-4 flex items-center justify-between gap-3">
               <span className={cn("font-mono font-bold text-signal", result.type === "choice" ? "text-[18px]" : "text-[16px]")}>
                 {finalLabel}
