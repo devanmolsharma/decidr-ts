@@ -44,7 +44,7 @@ export const PROVIDERS: Provider[] = [
     baseURL: "https://api.cerebras.ai/v1",
     needsKey: true,
     keyPlaceholder: "cerebras API key",
-    note: "Specialized inference hardware -- much lower per-token latency than a general hosted API. logprobs/top_logprobs (0-20) documented live on their own API reference. Default here because it's the fastest verified option.",
+    note: "Specialized inference hardware -- much lower per-token latency than a general hosted API. logprobs/top_logprobs (0-20) documented live on their own API reference.",
     models: [{ id: "qwen-3.8-27b", label: "qwen-3.8-27b" }],
   },
   {
@@ -92,4 +92,4 @@ export const PROVIDERS: Provider[] = [
   },
 ];
 
-export const DEFAULT_PROVIDER_ID = "cerebras";
+export const DEFAULT_PROVIDER_ID = "ollama";

@@ -254,6 +254,13 @@ Ollama model has no such floor. `Client`'s `cache` option controls the
 underlying speculative cache (on by default, persisted to
 `~/.decidr-ts/token-cache.json`) -- pass `cache: false` to disable it.
 
+`Client.decideAll(rows)` fires every row's request concurrently
+(`Promise.all`), not one at a time -- each row is still its own
+independent request, but a provider that isn't itself the bottleneck
+(Cerebras, notably) processes them essentially in parallel, so
+`decideAll`'s wall-clock cost for N rows lands close to one row's
+latency rather than N times it.
+
 ## Benchmarks
 
 Measured live, 3 runs each, `exhaustive: false` unless noted -- not
@@ -277,6 +284,58 @@ way) -- see the [webui playground](examples/webui/) for a live,
 in-browser version of these same numbers (screenshot at the top of this
 README). `qwen-3.8-27b` is currently the only (and smallest) model on
 Cerebras's public inference API -- checked live, not assumed.
+
+### Answering several questions about the same input
+
+[TypeSafe](https://console.typesafe.ai) (a comparable product) answers
+several independent yes/no questions about one shared input in a single
+batched request. decidr-ts has no equivalent today -- `Client.decideAll`
+now dispatches every row's request concurrently (see below), but each
+row is still its own independent request against the provider; there is
+no wire format shared across providers that lets multiple independent
+questions ride in one HTTP call (see
+[BATCHING_DESIGN.md](docs/BATCHING_DESIGN.md) for a real, not-yet-built
+design that would get decidr-ts to one request per batch, and the risk
+that's blocking it).
+
+Measured live (median of 5 runs per cell, each provider benchmarked in
+its own process to avoid cross-provider network contention), 10
+realistic scenarios (1–13 questions each, e.g. support-ticket triage,
+resume screening, content moderation, code review) -- every decidr-ts
+cell uses `Client.truth()` fired concurrently (`Promise.all`) across
+that scenario's questions, one real HTTPS request per question; every
+TypeSafe cell is its one real batched request:
+
+| Scenario | Questions | decidr-ts + Cerebras (`qwen-3.8-27b`) | decidr-ts + OpenAI (`gpt-4o-mini`) | TypeSafe (`jev-latest`) |
+|---|---:|---:|---:|---:|
+| single-question-triage | 1 | 184ms | 940ms | 163ms |
+| billing-dispute | 13 | 351ms | 1133ms | 144ms |
+| resume-screen | 5 | 351ms | 742ms | 155ms |
+| content-moderation | 8 | 305ms | 956ms | 182ms |
+| medical-intake | 2 | 269ms | 665ms | 136ms |
+| legal-doc-review | 6 | 275ms | 1098ms | 148ms |
+| code-review | 4 | 326ms | 678ms | 134ms |
+| single-question-fraud | 1 | 168ms | 576ms | 134ms |
+| email-routing | 3 | 172ms | 680ms | 146ms |
+| product-review-analysis | 10 | 266ms | 741ms | 148ms |
+
+TypeSafe's single batched request wins on latency in every scenario
+here, and by a wider margin than decidr-ts+Cerebras's own per-request
+floor would suggest -- it isn't just "1 request beats N concurrent
+ones," its `usage.output_tokens` on a 13-question batch (244 tokens) is
+well above what 13 one-token `decide()` races generate combined,
+suggesting real infrastructure advantages beyond request count. Where
+decidr-ts+Cerebras firing N concurrent requests gets closest is exactly
+where you'd expect: low question counts, where per-request floors
+dominate for both sides anyway. decidr-ts+OpenAI is consistently
+slowest, consistent with OpenAI's latency being queueing-dominated
+rather than compute-dominated (see Latency above).
+
+None of this changes correctness or what a `Decision` means --
+`Client.truth()` still returns the same calibrated, `logprobs`-derived
+probability either way. It's purely a request-count/latency trade,
+and it's the reason [BATCHING_DESIGN.md](docs/BATCHING_DESIGN.md)
+exists as a real, scoped next step rather than a hypothetical one.
 
 ## What would make this even faster
 

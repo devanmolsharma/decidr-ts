@@ -175,10 +175,18 @@ export class Client {
     return this.decideTree(row);
   }
 
+  /** Runs every row's `decide()` concurrently rather than one at a time.
+   * Each row is still its own independent request (or tree of requests)
+   * -- see docs/SPEC.md's Backend contract for why the wire format has
+   * no way to bundle multiple rows into one call -- but nothing stops
+   * those requests from being in flight at the same time, and unlike a
+   * model's own token generation, providers don't serialize independent
+   * requests against each other. Overlapping them collapses `decideAll`'s
+   * wall-clock cost from roughly N times one request's latency down to
+   * close to one request's latency, for any provider whose rate limit
+   * tolerates `rows.length` concurrent calls. */
   async decideAll(rows: Row[]): Promise<Decision[]> {
-    const out: Decision[] = [];
-    for (const row of rows) out.push(await this.decide(row));
-    return out;
+    return Promise.all(rows.map((row) => this.decide(row)));
   }
 
   /** Grade `state` against an ordered rubric (`levels`, low to high) --
