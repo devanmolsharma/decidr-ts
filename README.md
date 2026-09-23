@@ -7,6 +7,25 @@ from a list (**Choice**), grade something on a rubric (**Score**), or
 get a calibrated yes/no (**Noun**) -- in one forward pass, with no
 generated text to parse and nothing that can come back malformed.
 
+![A real Choice + Score request running against Cerebras in the browser playground](examples/webui/screenshots/playground-results.png)
+
+**[Try it live](https://devanmolsharma.github.io/decidr-ts/)** -- no
+signup, paste your own API key (or point it at a local Ollama model),
+pick an example, run a real request, see the real numbers come back.
+
+```bash
+npm install decidr-ts
+```
+
+- Skip to: [Quickstart](#quickstart-local-model-via-ollama) &middot;
+  [Three primitives](#three-primitives-choice-score-noun) &middot;
+  [Benchmarks](#benchmarks) &middot; [Docs](#docs)
+- Python version: [decidr](https://github.com/devanmolsharma/decidr) on PyPI
+
+![The Choice/Score/Noun primitives together on a multimodal (image) row](examples/webui/screenshots/vision-example.png)
+
+## What this is for
+
 If you're building ticket routing, intent classification, content
 moderation, agent-task dispatch, or any place your code currently does
 `JSON.parse(llm_response)` and hopes for the best, this replaces that
@@ -23,9 +42,6 @@ call with a typed result and a real confidence number.
 - **Fast.** No generation, no retries on malformed JSON. Measured live:
   as fast as ~165ms end-to-end on Cerebras for a real classification
   call -- see [Benchmarks](#benchmarks).
-- **[Try it live](https://devanmolsharma.github.io/decidr-ts/)** -- a
-  real in-browser playground, no signup: paste your own API key, pick an
-  example, run a real request, see the real numbers come back.
 
 This is the TypeScript port of [decidr](https://github.com/devanmolsharma/decidr)
 (Python, on PyPI as `decidr`). Same mechanism, same id rules, same
@@ -257,14 +273,10 @@ cherry-picked, this is the actual spread including warm-up variance:
 Cerebras's specialized inference hardware is consistently 2–6x faster
 than a general hosted API on identical requests, at identical accuracy
 (same `logprobs`-based mechanism, same measured probabilities either
-way) -- see the [webui playground](examples/webui/) for a live, in-browser
-version of these same numbers, screenshots below. `qwen-3.8-27b` is
-currently the only (and smallest) model on Cerebras's public inference
-API -- checked live, not assumed.
-
-![Playground running a real Choice + Score request against Cerebras](examples/webui/screenshots/playground-results.png)
-
-![The Choice/Score/Noun primitives together on a multimodal (image) row](examples/webui/screenshots/vision-example.png)
+way) -- see the [webui playground](examples/webui/) for a live,
+in-browser version of these same numbers (screenshot at the top of this
+README). `qwen-3.8-27b` is currently the only (and smallest) model on
+Cerebras's public inference API -- checked live, not assumed.
 
 ## What would make this even faster
 

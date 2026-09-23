@@ -1,6 +1,6 @@
 {
   "name": "decidr-ts",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Typed decisions from an LLM in one forward pass, local via Ollama or hosted via any OpenAI-compatible API",
   "type": "module",
   "main": "./dist/index.js",

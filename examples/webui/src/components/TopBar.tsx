@@ -135,6 +135,15 @@ export function TopBar({ activePresetId, onLoadPreset }: { activePresetId: strin
             )}
             title={keyStatus === "ok" ? "key works" : keyStatus === "bad" ? "key or request failed" : undefined}
           />
+          <a
+            href="https://github.com/devanmolsharma/decidr-ts/tree/main/examples/webui"
+            target="_blank"
+            rel="noreferrer"
+            className="text-[11px] text-muted-foreground hover:text-cyan hover:underline shrink-0 whitespace-nowrap"
+            title="Your key stays in this tab's memory and goes straight from your browser to the provider you picked -- never to any server we control. Check the source yourself."
+          >
+            key never leaves your browser &middot; view source
+          </a>
         </div>
       )}
 

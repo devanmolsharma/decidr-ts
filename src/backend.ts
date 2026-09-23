@@ -99,7 +99,11 @@ export class OpenAIBackend {
   ) {
     this.timeoutMs = options.timeoutMs ?? 120_000;
     this.client = new OpenAI({
-      apiKey: options.apiKey ?? process.env.OPENAI_API_KEY ?? "ollama", // Ollama's endpoint ignores the key but the SDK requires a non-empty string
+      // `||`, not `??`: an empty string (e.g. an unfilled browser input for
+      // a provider that doesn't need a key) must also fall through to the
+      // placeholder -- Ollama's endpoint ignores the key but the SDK
+      // requires a non-empty string.
+      apiKey: options.apiKey || process.env.OPENAI_API_KEY || "ollama",
       baseURL: options.baseURL ?? "https://api.openai.com/v1",
       timeout: this.timeoutMs,
       dangerouslyAllowBrowser: options.allowBrowser ?? false,

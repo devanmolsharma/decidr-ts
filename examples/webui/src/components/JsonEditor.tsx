@@ -53,7 +53,10 @@ export function JsonEditor({
    * should move when JSON is longer than the available space. */
   height?: string;
 }) {
-  const extensions = useMemo(() => [json(), editorTheme, syntaxHighlighting(highlightStyle)], []);
+  const extensions = useMemo(
+    () => [json(), editorTheme, syntaxHighlighting(highlightStyle), EditorView.lineWrapping],
+    [],
+  );
   return (
     <CodeMirror
       value={value}
