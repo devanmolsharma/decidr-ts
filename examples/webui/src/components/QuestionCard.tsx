@@ -36,7 +36,7 @@ export function QuestionCard({
   }
 
   return (
-    <div className="rounded-xl border border-border bg-card overflow-hidden">
+    <div className="rounded-xl border border-border bg-card overflow-hidden shrink-0">
       <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border/70 bg-secondary/30">
         <Select value={question.type} onValueChange={(v) => setType(v as PrimitiveType)}>
           <SelectTrigger className="w-auto h-auto p-0 border-0 shadow-none bg-transparent [&_svg]:hidden">

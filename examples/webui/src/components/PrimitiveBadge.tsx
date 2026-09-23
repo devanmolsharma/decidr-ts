@@ -13,7 +13,7 @@ export function PrimitiveBadge({ type, className }: { type: PrimitiveType; class
   return (
     <span
       className={cn(
-        "inline-flex items-center shrink-0 px-2 py-0.5 rounded-md border text-[11px] font-mono font-semibold uppercase tracking-wider",
+        "inline-flex items-center shrink-0 px-2 py-0.5 rounded-full border text-[11px] font-mono font-semibold uppercase tracking-wider",
         STYLES[type],
         className,
       )}

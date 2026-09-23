@@ -1,5 +1,6 @@
 import { DistributionChart } from "@/components/DistributionChart";
 import { PrimitiveBadge } from "@/components/PrimitiveBadge";
+import { ExplainStepByStepDialog } from "@/components/ExplainStepByStepDialog";
 import { fmtPct } from "@/lib/format";
 import type { QuestionSpec } from "@/lib/question-types";
 import type { QuestionResult } from "@/lib/run-question";
@@ -69,6 +70,9 @@ export function QuestionResultView({ question, result }: { question: QuestionSpe
         <span className="text-[11px] font-mono text-muted-foreground tabular-nums shrink-0">{result.latencyMs.toFixed(0)}ms</span>
       </div>
       <ResultBody result={result} />
+      <div className="mt-3 pt-3 border-t border-border/60">
+        <ExplainStepByStepDialog question={question} result={result} />
+      </div>
     </div>
   );
 }

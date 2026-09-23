@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { TopBar } from "@/components/TopBar";
+import { ModelPicker } from "@/components/ModelPicker";
 import { JsonEditor } from "@/components/JsonEditor";
 import { PanelToolbar } from "@/components/PanelToolbar";
 import { QuestionResultView } from "@/components/QuestionResultView";
@@ -189,7 +190,7 @@ export default function PlaygroundPage() {
               </a>
               ).
             </p>
-            <JsonEditor value={displayText} onChange={setDisplayText} />
+            <JsonEditor value={displayText} onChange={setDisplayText} height="min(60vh, 480px)" />
             {image && (
               <StateImageCard
                 src={imageDataUri(image)}
@@ -214,10 +215,10 @@ export default function PlaygroundPage() {
 
         <section className="flex-1 min-w-0 flex flex-col border-r border-border">
           <PanelToolbar label="Questions">
-            <div className="flex items-center gap-1 rounded-md bg-secondary p-0.5">
+            <div className="flex items-center gap-1 rounded-full bg-secondary p-0.5">
               <button
                 onClick={() => setQuestionsMode("builder")}
-                className={`px-2 py-1 rounded text-[11px] font-mono uppercase tracking-wider transition-colors ${
+                className={`px-2 py-1 rounded-full text-[11px] font-mono uppercase tracking-wider transition-colors ${
                   questionsMode === "builder" ? "bg-card text-foreground" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
@@ -225,7 +226,7 @@ export default function PlaygroundPage() {
               </button>
               <button
                 onClick={() => setQuestionsMode("json")}
-                className={`px-2 py-1 rounded text-[11px] font-mono uppercase tracking-wider transition-colors ${
+                className={`px-2 py-1 rounded-full text-[11px] font-mono uppercase tracking-wider transition-colors ${
                   questionsMode === "json" ? "bg-card text-foreground" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
@@ -238,7 +239,7 @@ export default function PlaygroundPage() {
             {questionsMode === "json" ? (
               <JsonEditor value={questionsText} onChange={setQuestionsText} height="100%" />
             ) : builderParseError ? (
-              <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-[12.5px] text-destructive">
+              <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-[12.5px] text-destructive">
                 Can't show the builder -- Questions JSON is invalid: {builderParseError}. Switch to JSON mode to fix it.
               </div>
             ) : (
@@ -251,39 +252,51 @@ export default function PlaygroundPage() {
                     onRemove={() => removeQuestion(i)}
                   />
                 ))}
-                <Button variant="outline" onClick={addQuestion} className="w-fit">
+                <Button variant="outline" onClick={addQuestion} className="w-fit shrink-0">
                   + add question
                 </Button>
               </>
             )}
+          </div>
 
-            <div className="rounded-xl border border-border bg-card p-4 shrink-0">
-              <div className="flex items-start justify-between mb-1 gap-3">
-                <label htmlFor="exhaustive-toggle" className="flex items-center gap-2 text-[12.5px] text-foreground cursor-pointer">
-                  <Switch id="exhaustive-toggle" checked={exhaustive} onCheckedChange={setExhaustive} />
-                  Exhaustive mode
-                </label>
-                <span className="text-[11px] text-muted-foreground">{exhaustive ? "full coverage" : "cheaper, partial"}</span>
-              </div>
-              <p className="text-[11px] text-muted-foreground leading-relaxed mb-3">
-                {exhaustive
-                  ? "Every branch of a hierarchical Choice is raced, so every option gets a real, comparable probability -- more requests."
-                  : "Only the winning path is explored; a losing branch with sub-options goes to “eliminated” instead of a real number — fewer requests."}{" "}
-                <a
-                  href={`${DOCS_BASE}/HIERARCHY.md#exhaustive-vs-cheap-new-clientmodel--exhaustive-`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-cyan hover:underline"
-                >
-                  Full explanation
-                </a>
-                .
-              </p>
-              <Button onClick={run} disabled={running} className="w-full">
-                {running ? "running…" : "Run request"}
-              </Button>
-              {error && <ErrorBox message={error} />}
+          {/* A fixed-height sibling below the scrollable card list, not
+           * an overlay -- Run request (and what it needs: provider,
+           * model, key) is the one part of this panel that should always
+           * stay reachable regardless of how many question cards are
+           * above it. */}
+          <div className="shrink-0 border-t border-border bg-card p-3.5 flex flex-col gap-2.5">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Model</div>
+              <ModelPicker />
             </div>
+
+            <div className="flex items-center justify-between gap-3 pt-2.5 border-t border-border/60">
+              <label htmlFor="exhaustive-toggle" className="flex items-center gap-2 text-[12.5px] text-foreground cursor-pointer">
+                <Switch id="exhaustive-toggle" checked={exhaustive} onCheckedChange={setExhaustive} />
+                Exhaustive mode
+                <span className="text-[11px] text-muted-foreground font-normal">
+                  &middot; {exhaustive ? "full coverage, more requests" : "cheaper, partial"}
+                </span>
+              </label>
+              <a
+                href={`${DOCS_BASE}/HIERARCHY.md#exhaustive-vs-cheap-new-clientmodel--exhaustive-`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[11px] text-cyan hover:underline shrink-0"
+                title={
+                  exhaustive
+                    ? "Every branch of a hierarchical Choice is raced, so every option gets a real, comparable probability -- more requests."
+                    : "Only the winning path is explored; a losing branch with sub-options goes to “eliminated” instead of a real number -- fewer requests."
+                }
+              >
+                what's this?
+              </a>
+            </div>
+
+            <Button onClick={run} disabled={running} className="w-full">
+              {running ? "running…" : "Run request"}
+            </Button>
+            {error && <ErrorBox message={error} />}
           </div>
         </section>
 

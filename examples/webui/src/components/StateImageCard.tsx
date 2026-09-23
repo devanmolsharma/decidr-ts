@@ -30,7 +30,7 @@ export function StateImageCard({
 
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden mt-3">
-      <img src={src} className="w-full max-h-56 object-contain bg-background/40" alt="State image" />
+      <img src={src} className="w-full max-h-96 object-contain bg-background/40" alt="State image" />
       <div className="flex items-center justify-between px-3 py-2 border-t border-border">
         <span className="text-[11px] font-mono text-muted-foreground">image content block</span>
         <div className="flex gap-1.5">

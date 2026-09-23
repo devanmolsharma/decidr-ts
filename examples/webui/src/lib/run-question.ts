@@ -1,8 +1,9 @@
 import { Client } from "decidr-ts";
 import type { Decision, ScoreResult, TruthResult, Backend } from "decidr-ts";
 import type { PlaygroundState, QuestionSpec } from "./question-types";
+import { recordingBackend, type RecordedCall } from "./record-backend";
 
-export type QuestionResult = { latencyMs: number } & (
+export type QuestionResult = { latencyMs: number; calls: RecordedCall[] } & (
   | { type: "choice"; decision: Decision; allOptionIds: string[] }
   | { type: "score"; result: ScoreResult; allLevelIds: string[] }
   | { type: "noun"; result: TruthResult }
@@ -22,7 +23,8 @@ export async function runQuestion(
   question: QuestionSpec,
   exhaustive: boolean,
 ): Promise<QuestionResult> {
-  const client = new Client(model, { backend, exhaustive });
+  const { backend: recorded, calls } = recordingBackend(backend);
+  const client = new Client(model, { backend: recorded, exhaustive });
   const start = performance.now();
 
   if (question.type === "score") {
@@ -34,15 +36,15 @@ export async function runQuestion(
     // race a handful of score levels actually needs.
     const levels = (question.criteria as string[]).map((description, i) => ({ id: `lv${i}`, description }));
     const result = await client.score({ id: question.id, state, question: question.instructions, levels });
-    return { type: "score", result, allLevelIds: levels.map((l) => l.id), latencyMs: performance.now() - start };
+    return { type: "score", result, allLevelIds: levels.map((l) => l.id), latencyMs: performance.now() - start, calls };
   }
 
   if (question.type === "noun") {
     const result = await client.truth({ id: question.id, state, question: question.instructions });
-    return { type: "noun", result, latencyMs: performance.now() - start };
+    return { type: "noun", result, latencyMs: performance.now() - start, calls };
   }
 
   const options = question.criteria as { id: string; description: string }[];
   const decision = await client.decide({ id: question.id, state, question: question.instructions, options });
-  return { type: "choice", decision, allOptionIds: options.map((o) => o.id), latencyMs: performance.now() - start };
+  return { type: "choice", decision, allOptionIds: options.map((o) => o.id), latencyMs: performance.now() - start, calls };
 }

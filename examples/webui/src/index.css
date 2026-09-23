@@ -6,14 +6,20 @@
 /*
  * decidr-ts showcase -- design tokens.
  *
- * A deliberately single-theme, dark "measurement instrument" palette:
- * near-black ground, a warm amber signal for the one number that matters
- * (the chosen answer), a cool cyan for the rest of a real, measured
- * distribution, and a muted slate for the two honest "no number" states
- * (unscored, eliminated) -- see app's DistributionChart component.
- * Committed to dark-only rather than a light/dark toggle nobody asked
- * for; every color below is a literal value, not derived from the
- * viewer's OS theme.
+ * Ported from design.md's monochrome/stadium-pill system (Mobbin-style),
+ * inverted to dark: design.md itself is light-first (near-black ink on
+ * white canvas) and only describes a polarity-flip for one example
+ * component, not a full dark palette, so this keeps every structural
+ * rule -- the tint ladder, hairline-only elevation (no shadows), stadium
+ * pills on every interactive element, Inter at design.md's signature
+ * weights (652/456/300, substituting for the commercial Saans per its
+ * own documented substitution table), and the single electric-blue
+ * accent reserved for commercial/emphasis signals -- while swapping the
+ * base polarity: near-white ink on a near-black canvas instead of the
+ * reverse. `--color-signal`/`--color-cyan`/`--color-slate-line` stay as
+ * the domain-specific measurement colors DistributionChart depends on
+ * (a real vs. no-number distinction that predates and is orthogonal to
+ * this system).
  */
 @theme inline {
   --font-heading: var(--font-sans);
@@ -47,47 +53,76 @@
   --color-foreground: var(--foreground);
   --color-background: var(--background);
 
-  /* Domain colors used directly by DistributionChart et al, alongside
-   * the shadcn semantic tokens above. */
+  /* design.md's ink/tint-ladder tokens, inverted to dark, kept
+   * available under their own names for components that want the exact
+   * design-system vocabulary rather than the shadcn semantic aliases
+   * above (which point at the same underlying values). */
+  --color-canvas: var(--background);
+  --color-canvas-soft: var(--secondary);
+  --color-field: var(--input);
+  --color-hairline: var(--border);
+  --color-hairline-soft: #1c2231;
+  --color-ink: var(--foreground);
+  --color-ink-soft: #c7cedb;
+  --color-text-muted: var(--muted-foreground);
+  --color-text-faint: #4a5568;
+  --color-on-primary: var(--primary-foreground);
+
+  /* design.md's single chromatic accent -- electric blue, reserved for
+   * commercial/emphasis signals only, never for primary CTAs. */
+  --color-accent-blue: #3d8bff;
+
+  /* Domain colors used directly by DistributionChart et al -- a
+   * measured-vs-no-number distinction independent of the design system
+   * above. */
   --color-signal: #f0a868;
   --color-signal-dim: #8a6238;
   --color-cyan: #5eead4;
   --color-slate-line: #3d4759;
 
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
+  /* design.md's radius scale: sm 16px, md 24px, full = stadium pill.
+   * Every interactive element (buttons, badges, toggles, the nav pill)
+   * uses --radius-full; content containers use --radius-md; small media
+   * chrome uses --radius-sm. */
+  --radius-sm: 16px;
+  --radius-md: 24px;
+  --radius-lg: 24px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
 }
 
 :root {
-  --background: #080a0f;
-  --foreground: #e7ebf3;
-  --card: #0f131c;
-  --card-foreground: #e7ebf3;
-  --popover: #0f131c;
-  --popover-foreground: #e7ebf3;
-  --primary: #f0a868;
-  --primary-foreground: #1a1206;
-  --secondary: #161c29;
-  --secondary-foreground: #e7ebf3;
-  --muted: #161c29;
-  --muted-foreground: #7a869c;
-  --accent: #161c29;
-  --accent-foreground: #5eead4;
+  /* Canvas: design.md's #ffffff/#f3f3f3/#f0f0f0 ladder inverted --
+   * near-black ground with the same ~6-8% tint steps lifted off it. */
+  --background: #0a0a0a;
+  --foreground: #f5f5f5;
+  --card: #0a0a0a;
+  --card-foreground: #f5f5f5;
+  --popover: #121212;
+  --popover-foreground: #f5f5f5;
+  /* design.md never uses the accent for CTAs -- primary stays the ink
+   * (here, light-on-dark) pill design.md itself specifies. */
+  --primary: #f5f5f5;
+  --primary-foreground: #0a0a0a;
+  --secondary: #1a1a1a;
+  --secondary-foreground: #f5f5f5;
+  --muted: #1a1a1a;
+  --muted-foreground: #8f8f8f;
+  --accent: #1a1a1a;
+  --accent-foreground: #3d8bff;
   --destructive: #f2685c;
-  --border: #252d40;
-  --input: #252d40;
-  --ring: #f0a868;
-  --radius: 0.5rem;
-  --sidebar: #0f131c;
-  --sidebar-foreground: #e7ebf3;
-  --sidebar-primary: #f0a868;
-  --sidebar-primary-foreground: #1a1206;
-  --sidebar-accent: #161c29;
-  --sidebar-accent-foreground: #e7ebf3;
-  --sidebar-border: #252d40;
-  --sidebar-ring: #f0a868;
+  --border: #262626;
+  --input: #1f1f1f;
+  --ring: #f5f5f5;
+  --radius: 24px;
+  --sidebar: #0a0a0a;
+  --sidebar-foreground: #f5f5f5;
+  --sidebar-primary: #f5f5f5;
+  --sidebar-primary-foreground: #0a0a0a;
+  --sidebar-accent: #1a1a1a;
+  --sidebar-accent-foreground: #f5f5f5;
+  --sidebar-border: #262626;
+  --sidebar-ring: #f5f5f5;
 }
 
 @layer base {
