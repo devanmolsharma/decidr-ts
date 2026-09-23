@@ -123,39 +123,79 @@ export class OpenAIBackend {
       top_logprobs: OpenAIBackend.TOP_LOGPROBS,
     };
 
-    let response: OpenAI.Chat.ChatCompletion;
     try {
       if (this.sendsReasoningEffort !== false) {
         try {
-          response = await this.client.chat.completions.create({ ...body, reasoning_effort: "none" } as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
+          const result = await this.streamOneToken({ ...body, reasoning_effort: "none" });
           this.sendsReasoningEffort = true;
+          return result;
         } catch (e) {
           if (this.isUnrecognizedArgumentError(e, "reasoning_effort")) {
             this.sendsReasoningEffort = false;
-            response = await this.client.chat.completions.create(body);
-          } else {
-            throw e;
+            return await this.streamOneToken(body);
           }
+          throw e;
         }
-      } else {
-        response = await this.client.chat.completions.create(body);
       }
+      return await this.streamOneToken(body);
     } catch (e) {
       throw new DecisionError(`chat completion failed: ${(e as Error).message}`);
     }
+  }
 
-    const choice = response.choices[0];
-    const entries: OpenAI.Chat.Completions.ChatCompletionTokenLogprob[] = choice?.logprobs?.content ?? [];
-    const logprobs: LogprobEntry[] = entries.map((entry) => ({
-      token: entry.token,
-      logprob: entry.logprob,
-      topLogprobs: entry.top_logprobs.map((t) => ({ token: t.token, logprob: t.logprob })),
-    }));
-
-    return {
-      content: choice?.message?.content ?? null,
-      logprobs,
-    };
+  /** Requests the completion as a stream and returns as soon as the
+   * first chunk carrying token+logprobs data has arrived, aborting the
+   * stream instead of waiting for it to finish. This only ever matters
+   * for `max_tokens: 1` (the only way this Backend is used) -- streaming
+   * doesn't reduce how much the model computes, but a non-streaming
+   * response requires the server to fully assemble and send its whole
+   * JSON envelope before the client sees anything, while a streamed
+   * response starts arriving the instant the server has the first
+   * token, cutting the time-to-first-byte the client actually waits on.
+   * Falls back to accumulating normally if a provider's streamed chunks
+   * never carry `logprobs` on the content delta (a non-conformant but
+   * possible shape) -- `content`/`logprobs` are read from whatever
+   * chunks did arrive before the loop ends either way, so this can't
+   * silently return nothing for a provider that behaves unusually. */
+  private async streamOneToken(
+    body: Omit<OpenAI.Chat.ChatCompletionCreateParamsNonStreaming, "stream">,
+  ): Promise<ChatResult> {
+    const stream = await this.client.chat.completions.create({
+      ...body,
+      stream: true,
+    } as OpenAI.Chat.ChatCompletionCreateParamsStreaming);
+    let content: string | null = null;
+    const logprobs: LogprobEntry[] = [];
+    try {
+      for await (const chunk of stream) {
+        const choice = chunk.choices[0];
+        if (!choice) continue;
+        if (choice.delta?.content) content = (content ?? "") + choice.delta.content;
+        const entries = choice.logprobs?.content ?? [];
+        for (const entry of entries) {
+          logprobs.push({
+            token: entry.token,
+            logprob: entry.logprob,
+            topLogprobs: entry.top_logprobs.map((t: { token: string; logprob: number }) => ({
+              token: t.token,
+              logprob: t.logprob,
+            })),
+          });
+        }
+        // `max_tokens: 1` means there is at most one real content token
+        // to see; once its logprobs have arrived, everything else left
+        // in the stream (a finish-reason chunk, an empty trailing chunk)
+        // carries nothing this caller needs -- stop reading rather than
+        // wait for the server to close the stream on its own.
+        if (logprobs.length > 0) break;
+      }
+    } finally {
+      // Releases the underlying response/connection back to the pool
+      // instead of leaving it half-read -- matters most exactly when we
+      // broke out of the loop early above.
+      stream.controller.abort();
+    }
+    return { content, logprobs };
   }
 
   /** Whether `error` is specifically OpenAI's "unrecognized request
