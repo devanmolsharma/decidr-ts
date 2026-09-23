@@ -150,14 +150,16 @@ export default function PlaygroundPage() {
     } catch (e) {
       setKeyStatus("bad");
       const message = e instanceof Error ? e.message : String(e);
-      // A generic "Failed to fetch"/network error against Ollama usually
-      // means either it isn't running, or (when this page isn't itself
-      // served from localhost/127.0.0.1 -- e.g. the hosted playground)
-      // Ollama's default CORS policy is blocking the request, since it
-      // only allows localhost/127.0.0.1 origins out of the box. The
-      // browser's own console message is a dead end for a visitor who
-      // doesn't know what OLLAMA_ORIGINS is.
-      const looksLikeNetworkFailure = /failed to fetch|networkerror|load failed/i.test(message);
+      // A generic "Failed to fetch"/"Connection error" against Ollama
+      // usually means either it isn't running, or (when this page isn't
+      // itself served from localhost/127.0.0.1 -- e.g. the hosted
+      // playground) Ollama's default CORS policy is blocking the
+      // request, since it only allows localhost/127.0.0.1 origins out of
+      // the box. The openai SDK reports a blocked fetch as its own
+      // generic "Connection error." (see openai/core/error.ts), not the
+      // browser's real CORS message -- so match that string too, not
+      // just the raw fetch-failure wording.
+      const looksLikeNetworkFailure = /failed to fetch|networkerror|load failed|connection error/i.test(message);
       const isLocalOrigin = /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
       setError(
         providerId === "ollama" && looksLikeNetworkFailure
