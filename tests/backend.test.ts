@@ -7,67 +7,33 @@ function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-/** `OpenAIBackend.chat` now always requests `stream: true` (see
- * backend.ts's streamOneToken -- returns as soon as the first
- * logprobs-bearing chunk arrives instead of waiting for a full
- * non-streaming response). Every fake fetch a test uses to stand in for
- * a successful completion needs to return a real Server-Sent-Events
- * stream in OpenAI's wire format, not a single JSON object -- this
- * builds that from the same "one choice" shape the old openaiCompletion
- * helper used, as one chunk carrying the whole choice (a real streaming
- * response spreads this across several chunks, but the SDK's parsing
- * and this Backend's own accumulation logic only care that a chunk with
- * `choices[0].logprobs.content` shows up in the stream, not how many
- * chunks it takes to get there). */
-function streamResponse(status: number, choice: Record<string, unknown>): Response {
-  const chunk = {
+function openaiCompletion(overrides: Record<string, unknown> = {}) {
+  return {
     id: "chatcmpl-test",
-    object: "chat.completion.chunk",
+    object: "chat.completion",
     created: 0,
     model: "test-model",
     choices: [
       {
         index: 0,
-        delta: { role: "assistant", content: choice.message ? (choice.message as { content: string }).content : "" },
-        finish_reason: choice.finish_reason ?? null,
-        logprobs: choice.logprobs,
+        message: { role: "assistant", content: "cat" },
+        finish_reason: "length",
+        logprobs: {
+          content: [
+            { token: "cat", logprob: -0.1, top_logprobs: [{ token: "cat", logprob: -0.1 }, { token: "dog", logprob: -2.0 }] },
+          ],
+        },
       },
     ],
-  };
-  const body = `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`;
-  return new Response(body, {
-    status,
-    headers: { "Content-Type": "text/event-stream" },
-  });
-}
-
-function openaiChoice(overrides: Record<string, unknown> = {}) {
-  return {
-    index: 0,
-    message: { role: "assistant", content: "cat" },
-    finish_reason: "length",
-    logprobs: {
-      content: [
-        { token: "cat", logprob: -0.1, top_logprobs: [{ token: "cat", logprob: -0.1 }, { token: "dog", logprob: -2.0 }] },
-      ],
-    },
     ...overrides,
   };
-}
-
-/** A streamed success response using `openaiChoice`'s default single
- * "cat" token -- the streaming equivalent of the old
- * `openaiCompletion()` helper, for tests that don't need to customize
- * the choice shape. */
-function openaiCompletionStream(choiceOverrides: Record<string, unknown> = {}): Response {
-  return streamResponse(200, openaiChoice(choiceOverrides));
 }
 
 test("OpenAIBackend: normalizes a real OpenAI-shaped response into ChatResult", async () => {
   let capturedBody: any;
   const fakeFetch = (async (_url: string, init: RequestInit) => {
     capturedBody = JSON.parse(init.body as string);
-    return openaiCompletionStream();
+    return jsonResponse(200, openaiCompletion());
   }) as typeof fetch;
 
   const backend = new OpenAIBackend({ apiKey: "sk-test", fetch: fakeFetch });
@@ -83,10 +49,7 @@ test("OpenAIBackend: normalizes a real OpenAI-shaped response into ChatResult", 
 });
 
 test("OpenAIBackend: empty logprobs.content becomes an empty logprobs array", async () => {
-  // A response whose only chunk never carries logprobs (streamOneToken's
-  // fallback path: the loop runs out of chunks without ever seeing
-  // `logprobs.length > 0`, so it returns whatever content it saw).
-  const fakeFetch = (async () => streamResponse(200, { message: { role: "assistant", content: "x" }, finish_reason: "stop", logprobs: null })) as typeof fetch;
+  const fakeFetch = (async () => jsonResponse(200, openaiCompletion({ choices: [{ index: 0, message: { role: "assistant", content: "x" }, finish_reason: "stop", logprobs: null }] }))) as typeof fetch;
   const backend = new OpenAIBackend({ apiKey: "sk-test", fetch: fakeFetch });
   const result = await backend.chat("test-model", [{ role: "user", content: "hi" }]);
   assert.deepEqual(result.logprobs, []);
@@ -96,7 +59,7 @@ test("OpenAIBackend: reasoning_effort auto-detection -- sent by default, kept on
   let capturedBody: any;
   const fakeFetch = (async (_url: string, init: RequestInit) => {
     capturedBody = JSON.parse(init.body as string);
-    return openaiCompletionStream();
+    return jsonResponse(200, openaiCompletion());
   }) as typeof fetch;
 
   const backend = new OpenAIBackend({ apiKey: "sk-test", fetch: fakeFetch });
@@ -114,7 +77,7 @@ test("OpenAIBackend: reasoning_effort -- on a 400 unrecognized-argument rejectio
     if (body.reasoning_effort !== undefined) {
       return jsonResponse(400, { error: { message: "Unrecognized request argument supplied: reasoning_effort", type: "invalid_request_error" } });
     }
-    return openaiCompletionStream();
+    return jsonResponse(200, openaiCompletion());
   }) as typeof fetch;
 
   const backend = new OpenAIBackend({ apiKey: "sk-test", fetch: fakeFetch });
@@ -152,7 +115,7 @@ test("OpenAIBackend: translates an image block into OpenAI's typed content array
   let capturedBody: any;
   const fakeFetch = (async (_url: string, init: RequestInit) => {
     capturedBody = JSON.parse(init.body as string);
-    return openaiCompletionStream();
+    return jsonResponse(200, openaiCompletion());
   }) as typeof fetch;
   const backend = new OpenAIBackend({ apiKey: "sk-test", fetch: fakeFetch });
   const messages: ChatMessage[] = [
@@ -167,25 +130,33 @@ test("OpenAIBackend: translates an image block into OpenAI's typed content array
 });
 
 test("OpenAIBackend: a video block raises -- chat completions has no video input", async () => {
-  const backend = new OpenAIBackend({ apiKey: "sk-test", fetch: (async () => openaiCompletionStream()) as typeof fetch });
+  const backend = new OpenAIBackend({ apiKey: "sk-test", fetch: (async () => jsonResponse(200, openaiCompletion())) as typeof fetch });
   const messages: ChatMessage[] = [{ role: "user", content: [{ type: "video", url: "https://x/y.mp4" }] }];
   await assert.rejects(() => backend.chat("test-model", messages), DecisionError);
 });
 
 test("OpenAIBackend.discoverTokensBatch: splits a multi-word response at each word's boundary", async () => {
   const fakeFetch = (async () =>
-    streamResponse(200, {
-      message: { role: "assistant", content: "delay\ndamaged" },
-      finish_reason: "length",
-      logprobs: {
-        content: [
-          { token: "delay", logprob: -0.1, top_logprobs: [] },
-          { token: "\n", logprob: -0.1, top_logprobs: [] },
-          { token: "dam", logprob: -0.1, top_logprobs: [] },
-          { token: "aged", logprob: -0.1, top_logprobs: [] },
+    jsonResponse(
+      200,
+      openaiCompletion({
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: "delay\ndamaged" },
+            finish_reason: "length",
+            logprobs: {
+              content: [
+                { token: "delay", logprob: -0.1, top_logprobs: [] },
+                { token: "\n", logprob: -0.1, top_logprobs: [] },
+                { token: "dam", logprob: -0.1, top_logprobs: [] },
+                { token: "aged", logprob: -0.1, top_logprobs: [] },
+              ],
+            },
+          },
         ],
-      },
-    })) as typeof fetch;
+      }),
+    )) as typeof fetch;
   const backend = new OpenAIBackend({ apiKey: "sk-test", fetch: fakeFetch });
   const result = await backend.discoverTokensBatch("test-model", ["delay", "damaged"]);
   assert.deepEqual(result.get("delay"), ["delay"]);
@@ -196,7 +167,7 @@ test("OpenAIBackend.discoverTokensBatch: empty word list makes no request", asyn
   let calls = 0;
   const fakeFetch = (async () => {
     calls++;
-    return openaiCompletionStream();
+    return jsonResponse(200, openaiCompletion());
   }) as typeof fetch;
   const backend = new OpenAIBackend({ apiKey: "sk-test", fetch: fakeFetch });
   const result = await backend.discoverTokensBatch("test-model", []);
