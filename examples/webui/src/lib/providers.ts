@@ -66,7 +66,7 @@ export const PROVIDERS: Provider[] = [
     baseURL: "http://127.0.0.1:11434/v1",
     needsKey: false,
     keyPlaceholder: "not required",
-    note: "Talks to a local Ollama server. Must be running and reachable from your browser at localhost:11434 -- Ollama allows browser requests from localhost/127.0.0.1 on any port by default, no setup needed. Running this page from somewhere other than localhost (e.g. the hosted playground) needs Ollama started with OLLAMA_ORIGINS set to allow that page's origin instead. Tags checked live against Ollama's model library.",
+    note: "Talks to a local Ollama server. Must be running and reachable from your browser at localhost:11434 -- Ollama allows browser requests from localhost/127.0.0.1 on any port by default, no setup needed. Running this page from somewhere other than localhost (e.g. the hosted playground) needs Ollama started with OLLAMA_ORIGINS set to allow that page's origin instead. Tags checked live against Ollama's model library. Measured live: roughly 150-200ms of that is Ollama's own per-request overhead, not model inference -- a known, reported upstream bug (every request re-reads the model's manifest and re-parses its GGUF header from disk even when already loaded, ollama/ollama#12443) that a submitted but not-yet-merged fix (PR #16161) would remove.",
     models: [
       { id: "llama3.1:8b", label: "llama3.1:8b" },
       { id: "qwen2.5:7b", label: "qwen2.5:7b" },
@@ -79,7 +79,7 @@ export const PROVIDERS: Provider[] = [
     baseURL: "https://api.together.xyz/v1",
     needsKey: true,
     keyPlaceholder: "together API key",
-    note: "logprobs and streaming are mutually exclusive on their API; decidr doesn't stream, so this doesn't affect it.",
+    note: "logprobs and streaming are mutually exclusive on their API -- decidr-ts requests logprobs, so this backend never asks Together for a streamed response.",
     models: [{ id: "meta-llama/Llama-3.3-70B-Instruct-Turbo", label: "Llama 3.3 70B Instruct Turbo" }],
   },
   {

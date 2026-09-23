@@ -25,6 +25,17 @@ transparently if the provider doesn't recognize that field — see
 [docs/SPEC.md §3.4](SPEC.md#34-disabling-reasoningthinking-mode-and-why-it-cant-be-done-unconditionally)
 for why this can't just be sent unconditionally to every provider.
 
+**Expect roughly 150-200ms of overhead per request that isn't model
+inference.** Measured live against a small local model already resident
+in memory: real inference is ~10-20ms, but Ollama's own request handler
+re-reads the model's manifest from disk and re-parses its full GGUF
+header on every single request to recompute capabilities, even when
+nothing has changed since the last call. This is a known, reported
+upstream bug ([ollama/ollama#12443](https://github.com/ollama/ollama/issues/12443)),
+with a fix submitted but not yet merged ([PR #16161](https://github.com/ollama/ollama/pull/16161)) —
+once that lands, this overhead should drop close to zero with no change
+needed on `decidr-ts`'s side.
+
 ## OpenAI
 
 ```ts

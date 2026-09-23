@@ -57,7 +57,11 @@ export function TopBar({ activePresetId, onLoadPreset }: { activePresetId: strin
       <span className="text-[11px] font-mono uppercase tracking-wider text-signal shrink-0">Try an example</span>
       <Select value={activePresetId} onValueChange={(id) => onLoadPreset(EXAMPLE_PRESETS.find((p) => p.id === id)!)}>
         <SelectTrigger className="w-auto min-w-52 h-8 text-[13px] shrink-0 rounded-full border-signal/50 bg-signal/10 text-foreground font-medium hover:bg-signal/15">
-          <SelectValue />
+          {/* base-ui's SelectValue falls back to the raw id (e.g.
+           * "ticket-routing") without a children render-function to
+           * resolve the real title from -- see ModelPicker.tsx's
+           * provider select for the same fix and the full explanation. */}
+          <SelectValue>{() => EXAMPLE_PRESETS.find((p) => p.id === activePresetId)?.title ?? activePresetId}</SelectValue>
         </SelectTrigger>
         <SelectContent className="max-w-80">
           {EXAMPLE_PRESETS.map((preset) => (

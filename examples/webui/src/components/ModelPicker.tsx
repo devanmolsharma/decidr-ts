@@ -30,7 +30,15 @@ export function ModelPicker() {
     setProviderId(id);
     setUsingCustomModel(false);
     const next = PROVIDERS.find((p) => p.id === id);
-    if (next && next.models.length > 0 && !next.models.some((m) => m.id === model)) {
+    if (!next) return;
+    // A provider with no listed models (Custom, llama.cpp) always needs
+    // a fresh model-id input -- carrying over the previous provider's
+    // model string (e.g. "qwen-3.8-27b" left over from Cerebras) reads
+    // as if that model is what will actually be requested, when it's
+    // really just stale state nobody cleared.
+    if (next.models.length === 0) {
+      setModel("");
+    } else if (!next.models.some((m) => m.id === model)) {
       setModel(next.models[0].id);
     }
   }
@@ -49,7 +57,13 @@ export function ModelPicker() {
     <div className="flex flex-wrap items-center gap-2">
       <Select value={providerId} onValueChange={selectProvider}>
         <SelectTrigger className="w-auto min-w-32 h-8 text-[13px] font-mono shrink-0">
-          <SelectValue />
+          {/* base-ui's SelectValue falls back to the raw stored value
+           * (e.g. "custom", "llamacpp") when it has no `items` map or
+           * children render-function to resolve a label from -- most
+           * provider ids happen to already read fine as their own
+           * label ("cerebras", "openai"), which is what let this go
+           * unnoticed until a label that differs from its id showed up. */}
+          <SelectValue>{() => currentProvider(providerId).label}</SelectValue>
         </SelectTrigger>
         <SelectContent>
           {PROVIDERS.map((p) => (
