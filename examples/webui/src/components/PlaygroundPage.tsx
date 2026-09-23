@@ -149,7 +149,18 @@ export default function PlaygroundPage() {
       setKeyStatus("ok");
     } catch (e) {
       setKeyStatus("bad");
-      setError(e instanceof Error ? e.message : String(e));
+      const message = e instanceof Error ? e.message : String(e);
+      // A generic "Failed to fetch"/network error against Ollama is
+      // almost always its default CORS policy blocking the browser's
+      // cross-origin request, not a real connectivity problem -- the
+      // browser's own console message is a dead end for a visitor who
+      // doesn't know what OLLAMA_ORIGINS is.
+      const looksLikeNetworkFailure = /failed to fetch|networkerror|load failed/i.test(message);
+      setError(
+        providerId === "ollama" && looksLikeNetworkFailure
+          ? `${message} -- Ollama blocks cross-origin browser requests by default. Restart it with OLLAMA_ORIGINS set to allow this page's origin, e.g. OLLAMA_ORIGINS=${window.location.origin} ollama serve`
+          : message,
+      );
     } finally {
       setTotalMs(performance.now() - runStart);
       setRunning(false);

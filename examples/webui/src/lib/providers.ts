@@ -66,7 +66,7 @@ export const PROVIDERS: Provider[] = [
     baseURL: "http://127.0.0.1:11434/v1",
     needsKey: false,
     keyPlaceholder: "not required",
-    note: "Talks to a local Ollama server. Must be running and reachable from your browser at localhost:11434. Tags checked live against Ollama's model library.",
+    note: "Talks to a local Ollama server. Must be running and reachable from your browser at localhost:11434, and started with OLLAMA_ORIGINS set to allow this page's origin (Ollama blocks cross-origin browser requests by default -- see the CORS note below). Tags checked live against Ollama's model library.",
     models: [
       { id: "llama3.1:8b", label: "llama3.1:8b" },
       { id: "qwen2.5:7b", label: "qwen2.5:7b" },

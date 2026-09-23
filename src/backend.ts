@@ -102,8 +102,10 @@ export class OpenAIBackend {
       // `||`, not `??`: an empty string (e.g. an unfilled browser input for
       // a provider that doesn't need a key) must also fall through to the
       // placeholder -- Ollama's endpoint ignores the key but the SDK
-      // requires a non-empty string.
-      apiKey: options.apiKey || process.env.OPENAI_API_KEY || "ollama",
+      // requires a non-empty string. `process` doesn't exist in a browser
+      // bundle at all (referencing it throws, not just returns undefined),
+      // so only read it in a Node-like environment.
+      apiKey: options.apiKey || (typeof process !== "undefined" ? process.env.OPENAI_API_KEY : undefined) || "ollama",
       baseURL: options.baseURL ?? "https://api.openai.com/v1",
       timeout: this.timeoutMs,
       dangerouslyAllowBrowser: options.allowBrowser ?? false,
